@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.devvit/
+*.log
+
+# Lockfiles
+package-lock.json
+project-lock.json
+.yarn-integrity
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+# References and Summaries
+REFERENCES/
+research/
