@@ -44,6 +44,7 @@ const REDIS_KEY_LAST_POSTED_EPISODE = 'last_posted_episode_number';
 const REDIS_KEY_LAST_POSTED_ET_DATE = 'last_posted_et_date';
 const REDIS_KEY_EPISODE_POST_ID_PREFIX = 'episode_post_id_';
 const REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX = 'episode_post_permalink_';
+const REDIS_KEY_LAST_CAST_AND_STAFF = 'last_successful_cast_and_staff';
 
 const SERIES_TITLE = 'Goodbye, Lara';
 const POST_TITLE_TEMPLATE = 'Goodbye, Lara - Episode {EPISODE_NUMBER} Discussion';
@@ -75,9 +76,41 @@ const MOCK_EPISODE_STAFF = `**Cast (EN/JP)**
 - Studio: Kinema Citrus
 - Producer: Kadokawa
 - Episode staff credits: TBA`;
+
+const HARDCODED_CAST_AND_STAFF = `**Cast (EN/JP)**
+- Lara - (EN: Brianna Knickerbocker / JP: Hana Hishikawa)
+- Mari Otsu - (EN: Anairis Quinones / JP: Nana Kawaishi)
+- Grace - (EN: Tiana Camacho / JP: Rica Fukami)
+- Luca - (EN: Kieran Regan / JP: Ayumu Murase)
+- Yoshihiro Otsu - (EN: TBA / JP: Tomohiro Ōno)
+- Ema Otsu - (EN: TBA / JP: Nanae Sumitomo)
+- Rowan - (EN: Brook Chalmers / JP: Masaki Terasoma)
+- Lisa - (EN: Cat Protano / JP: Minami Tsuda)
+
+**Staff (JP source)**
+- Director: Takushi Koide
+- Series Composition: Anna Kawahara
+- Character Design: Shiori Tani
+- Music: Yuma Yamaguchi`;
+
 let cachedAniListMediaId: number | null | undefined;
 let cachedWikipediaCharactersSection: string | null | undefined;
 let cachedWikipediaEpisodesSection: string | null | undefined;
+let cachedWikipediaCharactersSectionIndex: number | null | undefined;
+let cachedWikipediaEpisodesSectionIndex: number | null | undefined;
+
+type WikipediaSection = {
+  toclevel: number;
+  level: string;
+  line: string;
+  number: string;
+  index: string;
+  fromtitle: string;
+  byteoffset: number;
+  anchor: string;
+  linkAnchor: string;
+};
+
 const OFFICIAL_LINKS_MARKDOWN = `* [Official website](https://goodbyelara.com/)
 * [Official On Air / Japanese streaming schedule](https://goodbyelara.com/onair/)
 * [Latest official trailer](https://www.youtube.com/watch?v=gjq7xyVdv5I)
@@ -507,6 +540,116 @@ function normalizeName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function normalizeCharacterName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/oo/g, 'o')
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ');
+}
+
+function mergeCastBlocks(primaryBlock?: string, secondaryBlock?: string): string | undefined {
+  if (!isMeaningfulText(primaryBlock) && !isMeaningfulText(secondaryBlock)) {
+    return undefined;
+  }
+  if (isMeaningfulText(primaryBlock) && !isMeaningfulText(secondaryBlock)) {
+    return primaryBlock;
+  }
+  if (!isMeaningfulText(primaryBlock) && isMeaningfulText(secondaryBlock)) {
+    return secondaryBlock;
+  }
+
+  const primaryLines = primaryBlock!.split('\n');
+  const secondaryLines = secondaryBlock!.split('\n');
+
+  const primaryCast: Array<{ character: string; rawLine: string; en: string; jp: string }> = [];
+  const secondaryCast: Array<{ character: string; rawLine: string; en: string; jp: string }> = [];
+  const staffLines: string[] = [];
+
+  const castRegex = /^\s*-\s*(.+?)\s*-\s*\(\s*EN:\s*(.+?)\s*\/\s*JP:\s*(.+?)\s*\)/i;
+
+  for (const line of primaryLines) {
+    const match = line.match(castRegex);
+    if (match && match[1] && match[2] && match[3]) {
+      primaryCast.push({
+        character: match[1].trim(),
+        rawLine: line,
+        en: match[2].trim(),
+        jp: match[3].trim(),
+      });
+    } else {
+      if (!line.includes('**Cast (EN/JP)**')) {
+        staffLines.push(line);
+      }
+    }
+  }
+
+  for (const line of secondaryLines) {
+    const match = line.match(castRegex);
+    if (match && match[1] && match[2] && match[3]) {
+      secondaryCast.push({
+        character: match[1].trim(),
+        rawLine: line,
+        en: match[2].trim(),
+        jp: match[3].trim(),
+      });
+    }
+  }
+
+  const mergedCast: Array<{ character: string; en: string; jp: string }> = [];
+
+  for (const p of primaryCast) {
+    const pNorm = normalizeCharacterName(p.character);
+    const sMatch = secondaryCast.find((s) => normalizeCharacterName(s.character) === pNorm);
+
+    let finalEn = p.en;
+    let finalJp = p.jp;
+
+    if (sMatch) {
+      if (finalEn === 'TBA' && sMatch.en !== 'TBA') {
+        finalEn = sMatch.en;
+      }
+      if (finalJp === 'TBA' && sMatch.jp !== 'TBA') {
+        finalJp = sMatch.jp;
+      }
+    }
+
+    mergedCast.push({
+      character: p.character,
+      en: finalEn,
+      jp: finalJp,
+    });
+  }
+
+  for (const s of secondaryCast) {
+    const sNorm = normalizeCharacterName(s.character);
+    const pMatch = primaryCast.some((p) => normalizeCharacterName(p.character) === sNorm);
+    if (!pMatch) {
+      mergedCast.push({
+        character: s.character,
+        en: s.en,
+        jp: s.jp,
+      });
+    }
+  }
+
+  const resultLines: string[] = ['**Cast (EN/JP)**'];
+  for (const c of mergedCast) {
+    resultLines.push(`- ${c.character} - (EN: ${c.en} / JP: ${c.jp})`);
+  }
+
+  if (staffLines.length > 0) {
+    resultLines.push('');
+    resultLines.push(...staffLines);
+  }
+
+  return resultLines.join('\n');
+}
+
+
 function cleanWikipediaText(value: string): string {
   return value
     .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
@@ -520,6 +663,39 @@ function cleanWikipediaText(value: string): string {
     .replace(/\[[0-9]+\]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+async function fetchWikipediaSectionIndex(sectionName: string): Promise<number | null> {
+  const url = `https://en.wikipedia.org/w/api.php?action=parse&format=json&formatversion=2&prop=sections&page=${encodeURIComponent(WIKIPEDIA_PAGE_TITLE)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    console.error(`[cron] Wikipedia sections request failed: ${await readErrorSummary(res)}`);
+    return null;
+  }
+  const payload = (await res.json()) as { parse?: { sections?: WikipediaSection[] } };
+  const sections = payload.parse?.sections ?? [];
+  const found = sections.find((s) => s.line.toLowerCase() === sectionName.toLowerCase());
+  if (!found) {
+    console.error(`[cron] Wikipedia section not found: ${sectionName}`);
+    return null;
+  }
+  return Number(found.index);
+}
+
+async function getWikipediaCharactersSectionIndex(): Promise<number | null> {
+  if (cachedWikipediaCharactersSectionIndex !== undefined) {
+    return cachedWikipediaCharactersSectionIndex;
+  }
+  cachedWikipediaCharactersSectionIndex = await fetchWikipediaSectionIndex('Characters');
+  return cachedWikipediaCharactersSectionIndex;
+}
+
+async function getWikipediaEpisodesSectionIndex(): Promise<number | null> {
+  if (cachedWikipediaEpisodesSectionIndex !== undefined) {
+    return cachedWikipediaEpisodesSectionIndex;
+  }
+  cachedWikipediaEpisodesSectionIndex = await fetchWikipediaSectionIndex('Episodes');
+  return cachedWikipediaEpisodesSectionIndex;
 }
 
 async function fetchWikipediaSectionWikitext(section: number): Promise<string | null> {
@@ -543,7 +719,13 @@ async function getWikipediaCharactersSection(): Promise<string | null> {
     return cachedWikipediaCharactersSection;
   }
 
-  cachedWikipediaCharactersSection = await fetchWikipediaSectionWikitext(2);
+  const index = await getWikipediaCharactersSectionIndex();
+  if (index === null) {
+    cachedWikipediaCharactersSection = null;
+    return null;
+  }
+
+  cachedWikipediaCharactersSection = await fetchWikipediaSectionWikitext(index);
   return cachedWikipediaCharactersSection;
 }
 
@@ -552,23 +734,33 @@ async function getWikipediaEpisodesSection(): Promise<string | null> {
     return cachedWikipediaEpisodesSection;
   }
 
-  cachedWikipediaEpisodesSection = await fetchWikipediaSectionWikitext(3);
+  const index = await getWikipediaEpisodesSectionIndex();
+  if (index === null) {
+    cachedWikipediaEpisodesSection = null;
+    return null;
+  }
+
+  cachedWikipediaEpisodesSection = await fetchWikipediaSectionWikitext(index);
   return cachedWikipediaEpisodesSection;
 }
 
 function extractWikipediaEpisodeTitle(wikitext: string, episodeNumber: number): string | undefined {
-  const titleFieldMatches = Array.from(wikitext.matchAll(/\|\s*Title\s*=\s*([^\n|]+)/gi)).map((m) =>
-    cleanWikipediaText(m[1] ?? '')
-  );
+  // Strip reference tags first to prevent matching reference titles
+  const wikitextNoRefs = wikitext
+    .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
+    .replace(/<ref[^/>]*\/>/gi, '');
 
-  if (titleFieldMatches.length >= episodeNumber) {
-    const raw = titleFieldMatches[episodeNumber - 1] ?? '';
-    const beforeTranslit = raw.split(/Transliteration:/i)[0]?.trim();
-    const trimmed = (beforeTranslit ?? '').replace(/^"|"$/g, '').trim();
-    return isMeaningfulText(trimmed) ? trimmed : undefined;
+  const blocks = wikitextNoRefs.split(/\{\{(?:\^\|)?Episode\s+list/gi);
+  if (blocks.length > episodeNumber) {
+    const block = blocks[episodeNumber]!;
+    const titleMatch = block.match(/\|\s*Title\s*=\s*([^\n|]+)/i);
+    if (titleMatch && titleMatch[1]) {
+      const trimmed = cleanWikipediaText(titleMatch[1]).replace(/^"|"$/g, '').trim();
+      return isMeaningfulText(trimmed) ? trimmed : undefined;
+    }
   }
 
-  const tableMatches = Array.from(wikitext.matchAll(/\|\s*\d+\s*\|\|\s*"([^"]+)"/g)).map((m) =>
+  const tableMatches = Array.from(wikitextNoRefs.matchAll(/\|\s*\d+\s*\|\|\s*"([^"]+)"/g)).map((m) =>
     cleanWikipediaText(m[1] ?? '')
   );
   if (tableMatches.length >= episodeNumber) {
@@ -579,41 +771,76 @@ function extractWikipediaEpisodeTitle(wikitext: string, episodeNumber: number): 
   return undefined;
 }
 
+function cleanVoicedByLine(line: string): string {
+  let cleaned = line.replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '');
+  cleaned = cleaned.replace(/<ref[^/>]*\/>/gi, '');
+  return cleaned;
+}
+
 function extractWikipediaCastBlock(wikitext: string): string | undefined {
   const lines = wikitext.split('\n');
   const castLines: string[] = [];
 
-  for (const line of lines) {
-    if (!line.trimStart().startsWith('*') || !/Voiced by:/i.test(line)) {
+  let currentCharacter: string | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]?.trim();
+    if (!line) continue;
+
+    // Check if line defines a character
+    if (line.startsWith(';')) {
+      const nihongoMatch = line.match(/\{\{Nihongo\|([^|}]+)/i);
+      if (nihongoMatch && nihongoMatch[1]) {
+        currentCharacter = cleanWikipediaText(nihongoMatch[1]);
+      } else {
+        currentCharacter = cleanWikipediaText(line.substring(1).trim());
+      }
       continue;
     }
 
-    const characterMatch = line.match(/'''([^']+)'''/);
-    const characterName = cleanWikipediaText(characterMatch?.[1] ?? '');
-    if (!isMeaningfulText(characterName)) {
-      continue;
+    // Check if line contains Voiced by
+    if (line.startsWith(':') && currentCharacter) {
+      const cleanedLine = cleanVoicedByLine(line);
+      const voicedByMatch = cleanedLine.match(/\{\{Voiced by\|([^}]+)\}\}/i);
+      if (voicedByMatch && voicedByMatch[1]) {
+        const parts = voicedByMatch[1].split('|').map((p) => cleanWikipediaText(p.trim()));
+        const jpActor = parts[0] || 'TBA';
+        const enActor = parts[1] || 'TBA';
+
+        castLines.push(`- ${currentCharacter} - (EN: ${enActor} / JP: ${jpActor})`);
+        currentCharacter = null; // Reset for next character
+        if (castLines.length >= 5) {
+          break;
+        }
+      }
     }
 
-    const voicedSplit = line.split(/Voiced by:/i);
-    if (voicedSplit.length < 2) {
-      continue;
-    }
+    // Fallback/alternative support for the previous Voiced by format
+    if (line.startsWith('*') && /Voiced by:/i.test(line)) {
+      const characterMatch = line.match(/'''([^']+)'''/);
+      const characterName = cleanWikipediaText(characterMatch?.[1] ?? '');
+      if (isMeaningfulText(characterName)) {
+        const voicedSplit = line.split(/Voiced by:/i);
+        if (voicedSplit.length >= 2) {
+          const voicedPart = voicedSplit[1] ?? '';
+          const jpMatch = voicedPart.match(/([^;\n]+?)\s*\(Japanese\)/i);
+          const enMatch = voicedPart.match(/;\s*([^;\n]+?)\s*\(English\)/i);
 
-    const voicedPart = voicedSplit[1] ?? '';
-    const jpMatch = voicedPart.match(/([^;\n]+?)\s*\(Japanese\)/i);
-    const enMatch = voicedPart.match(/;\s*([^;\n]+?)\s*\(English\)/i);
+          const jpActor = cleanWikipediaText(jpMatch?.[1] ?? '');
+          const enActorRaw = cleanWikipediaText(enMatch?.[1] ?? '');
+          const enActor =
+            isMeaningfulText(enActorRaw) &&
+            (!isMeaningfulText(jpActor) || normalizeName(enActorRaw) !== normalizeName(jpActor))
+              ? enActorRaw
+              : 'TBA';
+          const jpDisplay = isMeaningfulText(jpActor) ? jpActor : 'TBA';
 
-    const jpActor = cleanWikipediaText(jpMatch?.[1] ?? '');
-    const enActorRaw = cleanWikipediaText(enMatch?.[1] ?? '');
-    const enActor =
-      isMeaningfulText(enActorRaw) && (!isMeaningfulText(jpActor) || normalizeName(enActorRaw) !== normalizeName(jpActor))
-        ? enActorRaw
-        : 'TBA';
-    const jpDisplay = isMeaningfulText(jpActor) ? jpActor : 'TBA';
-
-    castLines.push(`- ${characterName} - (EN: ${enActor} / JP: ${jpDisplay})`);
-    if (castLines.length >= 5) {
-      break;
+          castLines.push(`- ${characterName} - (EN: ${enActor} / JP: ${jpDisplay})`);
+          if (castLines.length >= 5) {
+            break;
+          }
+        }
+      }
     }
   }
 
@@ -624,34 +851,37 @@ function extractWikipediaCastBlock(wikitext: string): string | undefined {
   return `**Cast (EN/JP)**\n${castLines.join('\n')}`;
 }
 
-async function maybeFetchEpisodeInfoFromWikipedia(episodeNumber: number): Promise<ExternalEpisodePayload | null> {
-  const [episodesSection, charactersSection] = await Promise.all([
-    getWikipediaEpisodesSection(),
-    getWikipediaCharactersSection(),
-  ]);
+async function fetchFromWikipedia(episodeNumber: number): Promise<{ online: boolean; data: ExternalEpisodePayload | null }> {
+  try {
+    const [episodesSection, charactersSection] = await Promise.all([
+      getWikipediaEpisodesSection(),
+      getWikipediaCharactersSection(),
+    ]);
 
-  const result: ExternalEpisodePayload = { episode: episodeNumber };
-  let hasAnyField = false;
+    const result: ExternalEpisodePayload = { episode: episodeNumber };
+    let hasAnyField = false;
 
-  const episodesText = episodesSection ?? undefined;
-  if (isMeaningfulText(episodesText)) {
-    const title = extractWikipediaEpisodeTitle(episodesText, episodeNumber);
-    if (isMeaningfulText(title)) {
-      result.title = title;
-      hasAnyField = true;
+    if (episodesSection) {
+      const title = extractWikipediaEpisodeTitle(episodesSection, episodeNumber);
+      if (isMeaningfulText(title)) {
+        result.title = title;
+        hasAnyField = true;
+      }
     }
-  }
 
-  const charactersText = charactersSection ?? undefined;
-  if (isMeaningfulText(charactersText)) {
-    const castBlock = extractWikipediaCastBlock(charactersText);
-    if (isMeaningfulText(castBlock)) {
-      result.episodeStaff = castBlock;
-      hasAnyField = true;
+    if (charactersSection) {
+      const castBlock = extractWikipediaCastBlock(charactersSection);
+      if (isMeaningfulText(castBlock)) {
+        result.episodeStaff = castBlock;
+        hasAnyField = true;
+      }
     }
-  }
 
-  return hasAnyField ? result : null;
+    return { online: true, data: hasAnyField ? result : null };
+  } catch (err) {
+    console.error(`[cron] Wikipedia fetch failed:`, err);
+    return { online: false, data: null };
+  }
 }
 
 async function resolveAniListMediaId(): Promise<number | null> {
@@ -694,183 +924,238 @@ async function resolveAniListMediaId(): Promise<number | null> {
   return cachedAniListMediaId;
 }
 
-async function maybeFetchEpisodeStaffFromAniList(mediaId: number): Promise<string | undefined> {
-  const query = `
-    query ($id: Int) {
-      Media(id: $id, type: ANIME) {
-        characters(sort: [ROLE, RELEVANCE], perPage: 10) {
-          edges {
-            role
-            node {
-              name {
-                full
+async function fetchFromAniList(episodeNumber: number): Promise<{ online: boolean; data: ExternalEpisodePayload | null }> {
+  try {
+    const mediaId = await resolveAniListMediaId();
+    if (!mediaId) {
+      return { online: false, data: null };
+    }
+
+    const query = `
+      query ($id: Int) {
+        Media(id: $id, type: ANIME) {
+          episodes
+          nextAiringEpisode {
+            episode
+            airingAt
+          }
+          streamingEpisodes {
+            title
+          }
+          characters(sort: [ROLE, RELEVANCE], perPage: 10) {
+            edges {
+              role
+              node {
+                name {
+                  full
+                }
               }
-            }
-            englishVoiceActors: voiceActors(language: ENGLISH, sort: [RELEVANCE]) {
-              name {
-                full
-              }
-            }
-            japaneseVoiceActors: voiceActors(language: JAPANESE, sort: [RELEVANCE]) {
-              name {
-                full
+              japaneseVoiceActors: voiceActors(language: JAPANESE, sort: [RELEVANCE]) {
+                name {
+                  full
+                }
               }
             }
           }
-        }
-        staff(sort: [RELEVANCE], perPage: 5) {
-          edges {
-            role
-            node {
-              name {
-                full
+          staff(sort: [RELEVANCE], perPage: 5) {
+            edges {
+              role
+              node {
+                name {
+                  full
+                }
               }
             }
           }
         }
       }
+    `;
+
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ query, variables: { id: mediaId } }),
+    });
+
+    if (!res.ok) {
+      if (res.status >= 500) {
+        return { online: false, data: null };
+      }
+      return { online: true, data: null };
     }
-  `;
 
-  const res = await fetch('https://graphql.anilist.co', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({ query, variables: { id: mediaId } }),
-  });
-
-  if (!res.ok) {
-    console.error(`[cron] AniList dub-cast lookup failed: ${await readErrorSummary(res)}`);
-    return undefined;
-  }
-
-  const payload = (await res.json()) as {
-    data?: {
-      Media?: {
-        characters?: {
-          edges?: Array<{
-            role?: string;
-            node?: { name?: { full?: string } };
-            englishVoiceActors?: Array<{ name?: { full?: string } }>;
-            japaneseVoiceActors?: Array<{ name?: { full?: string } }>;
-          }>;
-        };
-        staff?: {
-          edges?: Array<{
-            role?: string;
-            node?: { name?: { full?: string } };
-          }>;
+    const payload = (await res.json()) as {
+      data?: {
+        Media?: {
+          episodes?: number;
+          nextAiringEpisode?: { episode?: number; airingAt?: number };
+          streamingEpisodes?: Array<{ title?: string }>;
+          characters?: {
+            edges?: Array<{
+              role?: string;
+              node?: { name?: { full?: string } };
+              japaneseVoiceActors?: Array<{ name?: { full?: string } }>;
+            }>;
+          };
+          staff?: {
+            edges?: Array<{
+              role?: string;
+              node?: { name?: { full?: string } };
+            }>;
+          };
         };
       };
     };
-  };
 
-  const edges = payload.data?.Media?.characters?.edges ?? [];
-  const castEntries = edges
-    .map((edge) => {
-      const characterName = edge.node?.name?.full;
-      const englishActor = edge.englishVoiceActors?.[0]?.name?.full;
-      const japaneseActor = edge.japaneseVoiceActors?.[0]?.name?.full;
-      if (!isMeaningfulText(characterName) || (!isMeaningfulText(englishActor) && !isMeaningfulText(japaneseActor))) {
-        return undefined;
+    const media = payload.data?.Media;
+    if (!media) return { online: true, data: null };
+
+    const result: ExternalEpisodePayload = {
+      episode: episodeNumber,
+    };
+
+    if (media.episodes) {
+      result.totalEpisodes = media.episodes;
+    }
+
+    const nextAiring = media.nextAiringEpisode;
+    if (nextAiring?.episode === episodeNumber && nextAiring.airingAt) {
+      result.airingAt = nextAiring.airingAt * 1000;
+    }
+
+    const streamingTitle = media.streamingEpisodes?.[episodeNumber - 1]?.title;
+    if (isMeaningfulText(streamingTitle)) {
+      result.title = streamingTitle;
+    }
+
+    // Format JP cast & staff only
+    const charEdges = media.characters?.edges ?? [];
+    const castEntries = charEdges
+      .map((edge) => {
+        const characterName = edge.node?.name?.full;
+        const jpActor = edge.japaneseVoiceActors?.[0]?.name?.full;
+        if (!isMeaningfulText(characterName) || !isMeaningfulText(jpActor)) {
+          return undefined;
+        }
+        return `${characterName} - (EN: TBA / JP: ${jpActor})`;
+      })
+      .filter((v): v is string => isMeaningfulText(v))
+      .slice(0, 5);
+
+    const staffEdges = media.staff?.edges ?? [];
+    const staffEntries = staffEdges
+      .map((edge) => {
+        const staffName = edge.node?.name?.full;
+        if (!isMeaningfulText(staffName)) return undefined;
+        const roleLabel = isMeaningfulText(edge.role) ? toRoleLabel(edge.role) : 'Staff';
+        return `${roleLabel}: ${staffName}`;
+      })
+      .filter((v): v is string => isMeaningfulText(v))
+      .slice(0, 5);
+
+    if (castEntries.length > 0 || staffEntries.length > 0) {
+      const sections: string[] = [];
+      if (castEntries.length > 0) {
+        sections.push(`**Cast (EN/JP)**\n${castEntries.map(l => `- ${l}`).join('\n')}`);
       }
-
-      const enDisplay =
-        isMeaningfulText(englishActor) &&
-        (!isMeaningfulText(japaneseActor) || normalizeName(englishActor) !== normalizeName(japaneseActor))
-          ? englishActor
-          : 'TBA';
-      const jpDisplay = isMeaningfulText(japaneseActor) ? japaneseActor : 'TBA';
-      return `${characterName} - (EN: ${enDisplay} / JP: ${jpDisplay})`;
-    })
-    .filter((value): value is string => isMeaningfulText(value))
-    .slice(0, 5);
-
-  const castLines = castEntries.map((line) => `- ${line}`);
-
-  const staffEdges = payload.data?.Media?.staff?.edges ?? [];
-  const staffEntries = staffEdges
-    .map((edge) => {
-      const staffName = edge.node?.name?.full;
-      if (!isMeaningfulText(staffName)) {
-        return undefined;
+      if (staffEntries.length > 0) {
+        sections.push(`**Staff (JP source)**\n${staffEntries.map(l => `- ${l}`).join('\n')}`);
       }
+      result.episodeStaff = sections.join('\n\n');
+    }
 
-      const roleLabel = isMeaningfulText(edge.role) ? toRoleLabel(edge.role) : 'Staff';
-      return `${roleLabel}: ${staffName}`;
-    })
-    .filter((value): value is string => isMeaningfulText(value))
-    .slice(0, 5);
-
-  const staffLines = staffEntries.map((line) => `- ${line}`);
-
-  if (castLines.length === 0 && staffLines.length === 0) {
-    return undefined;
+    return { online: true, data: result };
+  } catch (err) {
+    console.error(`[cron] AniList fetch failed:`, err);
+    return { online: false, data: null };
   }
-
-  const sections: string[] = [];
-  if (castLines.length > 0) {
-    sections.push(`**Cast (EN/JP)**\n${castLines.join('\n')}`);
-  }
-  if (staffLines.length > 0) {
-    sections.push(`**Staff (JP source)**\n${staffLines.join('\n')}`);
-  }
-
-  return sections.join('\n\n');
 }
 
-async function maybeFetchEpisodeInfoFromJikan(episodeNumber: number): Promise<ExternalEpisodePayload | null> {
-  const malId = JIKAN_ANIME_ID;
-  if (!malId) return null;
+async function fetchFromKitsu(episodeNumber: number): Promise<{ online: boolean; data: ExternalEpisodePayload | null }> {
+  if (!isMeaningfulText(KITSU_ANIME_ID)) return { online: false, data: null };
 
-  const url = `https://api.jikan.moe/v4/anime/${malId}/episodes/${episodeNumber}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    console.error(`[cron] Jikan request failed: ${await readErrorSummary(res)}`);
-    return null;
+  const offsets = [Math.max(0, episodeNumber - 1), 0];
+  const limit = 10;
+  let lastError: any = null;
+
+  for (const offset of offsets) {
+    const url =
+      `https://kitsu.io/api/edge/anime/${encodeURIComponent(KITSU_ANIME_ID)}/episodes` +
+      `?page[limit]=${String(limit)}&page[offset]=${String(offset)}`;
+
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'application/vnd.api+json',
+        },
+      });
+
+      if (!res.ok) {
+        if (res.status >= 500) {
+          lastError = new Error(`Kitsu server returned ${res.status}`);
+          continue;
+        }
+        return { online: true, data: null };
+      }
+
+      const payload = (await res.json()) as {
+        data?: Array<{
+          attributes?: {
+            number?: number;
+            canonicalTitle?: string;
+            titles?: { en?: string; en_jp?: string; ja_jp?: string };
+            synopsis?: string;
+            description?: string;
+            airdate?: string;
+          };
+        }>;
+        meta?: { count?: number };
+      };
+
+      const episodes = payload.data ?? [];
+      const match = episodes.find((entry) => entry.attributes?.number === episodeNumber);
+      
+      const result: ExternalEpisodePayload = {
+        episode: episodeNumber,
+      };
+
+      if (typeof payload.meta?.count === 'number' && payload.meta.count > 0) {
+        result.totalEpisodes = payload.meta.count;
+      }
+
+      if (match) {
+        const attributes = match.attributes ?? {};
+        const title = choosePreferredEnglish(
+          attributes.titles?.en,
+          choosePreferredEnglish(attributes.canonicalTitle, attributes.titles?.en_jp)
+        );
+        const synopsis = choosePreferredEnglish(attributes.synopsis, attributes.description);
+
+        if (title !== undefined && isMeaningfulText(title)) {
+          result.title = sanitizeEpisodeTitle(title);
+        }
+
+        const validSyn = isValidSynopsis(synopsis) ? synopsis : undefined;
+        if (validSyn !== undefined) {
+          result.synopsis = validSyn;
+        }
+
+        if (attributes.airdate !== undefined && isMeaningfulText(attributes.airdate)) {
+          result.airingAt = attributes.airdate;
+        }
+      }
+
+      return { online: true, data: result };
+    } catch (err) {
+      lastError = err;
+    }
   }
 
-  const payload = (await res.json()) as {
-    data?: {
-      title?: string;
-      title_japanese?: string;
-      title_romanji?: string;
-      synopsis?: string;
-      aired?: string;
-      mal_id?: number;
-      score?: number;
-      filler?: boolean;
-      recap?: boolean;
-      duration?: number;
-      forum_url?: string;
-      episode_id?: number;
-      episode?: number;
-    };
-  };
-
-  const data = payload.data;
-  if (!data) return null;
-
-  const result: ExternalEpisodePayload = {
-    episode: data.episode ?? episodeNumber,
-  };
-
-  const jikanTitle = data.title ?? data.title_romanji ?? data.title_japanese;
-  if (jikanTitle) {
-    result.title = jikanTitle;
-  }
-
-  if (data.synopsis) {
-    result.synopsis = data.synopsis;
-  }
-
-  if (data.aired) {
-    result.airingAt = data.aired;
-  }
-
-  return result;
+  console.error(`[cron] Kitsu request failed completely:`, lastError);
+  return { online: false, data: null };
 }
 
 async function maybeFetchTotalEpisodesFromJikan(): Promise<number | null> {
@@ -888,246 +1173,156 @@ async function maybeFetchTotalEpisodesFromJikan(): Promise<number | null> {
   return payload.data?.episodes ?? null;
 }
 
-async function maybeFetchEpisodeInfoFromAniList(episodeNumber: number): Promise<ExternalEpisodePayload | null> {
-  const mediaId = await resolveAniListMediaId();
-  if (!mediaId) return null;
+async function fetchFromJikan(episodeNumber: number): Promise<{ online: boolean; title?: string | undefined; synopsis?: string | undefined }> {
+  const malId = JIKAN_ANIME_ID;
+  if (!malId) return { online: false };
 
-  const query = `
-    query ($id: Int) {
-      Media(id: $id, type: ANIME) {
-        episodes
-        title {
-          romaji
-          english
-          native
-        }
-        description(asHtml: false)
-        nextAiringEpisode {
-          episode
-          airingAt
-        }
-        streamingEpisodes {
-          title
-        }
-      }
-    }
-  `;
-
-  const res = await fetch('https://graphql.anilist.co', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({ query, variables: { id: mediaId } }),
-  });
-
-  if (!res.ok) {
-    console.error(`[cron] AniList request failed: ${await readErrorSummary(res)}`);
-    return null;
-  }
-
-  const payload = (await res.json()) as {
-    data?: {
-      Media?: {
-        episodes?: number;
-        title?: { romaji?: string; english?: string; native?: string };
-        description?: string;
-        nextAiringEpisode?: { episode?: number; airingAt?: number };
-        streamingEpisodes?: Array<{ title?: string }>;
-      };
-    };
-  };
-
-  const media = payload.data?.Media;
-  if (!media) return null;
-
-  const streamingTitle = media.streamingEpisodes?.[episodeNumber - 1]?.title;
-  const nextAiring = media.nextAiringEpisode;
-  const airingAt = nextAiring?.episode === episodeNumber && nextAiring.airingAt
-    ? nextAiring.airingAt * 1000
-    : undefined;
-
-  const result: ExternalEpisodePayload = {
-    episode: episodeNumber,
-  };
-
-  // Use AniList only when episode-specific title exists.
-  if (isMeaningfulText(streamingTitle)) {
-    result.title = streamingTitle;
-  }
-
-  // AniList media description is series-level, not episode-level, so skip it.
-
-  const episodeStaff = await maybeFetchEpisodeStaffFromAniList(mediaId);
-  if (episodeStaff) {
-    result.episodeStaff = episodeStaff;
-  }
-
-  if (airingAt) {
-    result.airingAt = airingAt;
-  }
-
-  if (media.episodes) {
-    result.totalEpisodes = media.episodes;
-  }
-
-  return result;
-}
-
-async function maybeFetchEpisodeInfoFromKitsu(episodeNumber: number): Promise<ExternalEpisodePayload | null> {
-  if (!isMeaningfulText(KITSU_ANIME_ID)) return null;
-
-  // Start near the requested episode and fall back to the first page if needed.
-  const offsets = [Math.max(0, episodeNumber - 1), 0];
-  const limit = 10;
-
-  for (const offset of offsets) {
-    const url =
-      `https://kitsu.io/api/edge/anime/${encodeURIComponent(KITSU_ANIME_ID)}/episodes` +
-      `?page[limit]=${String(limit)}&page[offset]=${String(offset)}`;
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/vnd.api+json',
-      },
-    });
-
+  const url = `https://api.jikan.moe/v4/anime/${malId}/episodes/${episodeNumber}`;
+  try {
+    const res = await fetch(url);
     if (!res.ok) {
-      console.error(`[cron] Kitsu request failed: ${await readErrorSummary(res)}`);
-      continue;
+      if (res.status >= 500) {
+        return { online: false };
+      }
+      return { online: true };
     }
 
     const payload = (await res.json()) as {
-      data?: Array<{
-        attributes?: {
-          number?: number;
-          canonicalTitle?: string;
-          titles?: { en?: string; en_jp?: string; ja_jp?: string };
-          synopsis?: string;
-          description?: string;
-          airdate?: string;
-        };
-      }>;
-      meta?: { count?: number };
+      data?: {
+        title?: string;
+        synopsis?: string;
+      };
     };
 
-    const episodes = payload.data ?? [];
-    const match = episodes.find((entry) => entry.attributes?.number === episodeNumber);
-    if (!match) {
-      continue;
-    }
-
-    const attributes = match.attributes ?? {};
-    const title = choosePreferredEnglish(
-      attributes.titles?.en,
-      choosePreferredEnglish(attributes.canonicalTitle, attributes.titles?.en_jp)
-    );
-    const synopsis = choosePreferredEnglish(attributes.synopsis, attributes.description);
-
-    const result: ExternalEpisodePayload = {
-      episode: episodeNumber,
+    const data = payload.data;
+    return {
+      online: true,
+      title: data?.title || undefined,
+      synopsis: data?.synopsis || undefined,
     };
-
-    if (isMeaningfulText(title)) {
-      result.title = sanitizeEpisodeTitle(title);
-    }
-
-    if (isMeaningfulText(synopsis)) {
-      result.synopsis = synopsis;
-    }
-
-    if (isMeaningfulText(attributes.airdate)) {
-      result.airingAt = attributes.airdate;
-    }
-
-    if (typeof payload.meta?.count === 'number' && payload.meta.count > 0) {
-      result.totalEpisodes = payload.meta.count;
-    }
-
-    return result;
+  } catch (err) {
+    console.error(`[cron] Jikan episodes fetch failed:`, err);
+    return { online: false };
   }
-
-  return null;
 }
 
-function mergeEpisodeMetadata(
-  episodeNumber: number,
-  fromJikan: ExternalEpisodePayload | null,
-  fromAniList: ExternalEpisodePayload | null,
-  fromKitsu: ExternalEpisodePayload | null
-): ExternalEpisodePayload | null {
-  if (!fromJikan && !fromAniList && !fromKitsu) {
-    return null;
+async function fetchStaffFromJikan(): Promise<string | undefined> {
+  const malId = JIKAN_ANIME_ID;
+  if (!malId) return undefined;
+
+  try {
+    const res = await fetch(`https://api.jikan.moe/v4/anime/${malId}/characters`);
+    if (!res.ok) return undefined;
+
+    const payload = (await res.json()) as {
+      data?: Array<{
+        character?: { name?: string };
+        voice_actors?: Array<{ person?: { name?: string }; language?: string }>;
+      }>;
+    };
+
+    const characters = payload.data ?? [];
+    const castLines: string[] = [];
+    for (const char of characters) {
+      const charName = char.character?.name;
+      const jpActor = char.voice_actors?.find(va => va.language === 'Japanese')?.person?.name;
+      if (charName && jpActor) {
+        castLines.push(`- ${charName} - (EN: TBA / JP: ${jpActor})`);
+        if (castLines.length >= 5) break;
+      }
+    }
+
+    if (castLines.length > 0) {
+      return `**Cast (EN/JP)**\n${castLines.join('\n')}`;
+    }
+  } catch (err) {
+    console.error('[cron] Jikan characters fetch failed:', err);
   }
+  return undefined;
+}
 
-  const jikanTitle = isMeaningfulText(fromJikan?.title) ? fromJikan.title : undefined;
-  const aniListTitle = isMeaningfulText(fromAniList?.title) ? fromAniList.title : undefined;
-  const kitsuTitle = isMeaningfulText(fromKitsu?.title) ? fromKitsu.title : undefined;
-  const title = choosePreferredEnglish(kitsuTitle, choosePreferredEnglish(jikanTitle, aniListTitle));
+async function fetchJikanStaff(): Promise<string | undefined> {
+  const malId = JIKAN_ANIME_ID;
+  if (!malId) return undefined;
 
-  const jikanSynopsis = isMeaningfulText(fromJikan?.synopsis) ? fromJikan.synopsis : undefined;
-  const aniListSynopsis = isMeaningfulText(fromAniList?.synopsis) ? fromAniList.synopsis : undefined;
-  const kitsuSynopsis = isMeaningfulText(fromKitsu?.synopsis) ? fromKitsu.synopsis : undefined;
-  const synopsis = choosePreferredEnglish(kitsuSynopsis, choosePreferredEnglish(jikanSynopsis, aniListSynopsis));
+  try {
+    const res = await fetch(`https://api.jikan.moe/v4/anime/${malId}/staff`);
+    if (!res.ok) return undefined;
 
-  const merged: ExternalEpisodePayload = {
-    episode:
-      fromJikan?.episodeNumber ??
-      fromJikan?.episode ??
-      fromJikan?.number ??
-      fromAniList?.episodeNumber ??
-      fromAniList?.episode ??
-      fromAniList?.number ??
-      fromKitsu?.episodeNumber ??
-      fromKitsu?.episode ??
-      fromKitsu?.number ??
-      episodeNumber,
-  };
+    const payload = (await res.json()) as {
+      data?: Array<{
+        person?: { name?: string };
+        positions?: string[];
+      }>;
+    };
 
-  if (isMeaningfulText(title)) {
-    merged.title = sanitizeEpisodeTitle(title);
+    const staff = payload.data ?? [];
+    const staffLines: string[] = [];
+    for (const st of staff) {
+      const name = st.person?.name;
+      const position = st.positions?.[0];
+      if (name && position) {
+        staffLines.push(`- ${position}: ${name}`);
+        if (staffLines.length >= 5) break;
+      }
+    }
+
+    if (staffLines.length > 0) {
+      return `**Staff (JP source)**\n${staffLines.join('\n')}`;
+    }
+  } catch (err) {
+    console.error('[cron] Jikan staff fetch failed:', err);
   }
+  return undefined;
+}
 
-  if (isMeaningfulText(synopsis)) {
-    merged.synopsis = synopsis;
+async function fetchJikanEpisodeStaff(): Promise<string | undefined> {
+  const [cast, staff] = await Promise.all([
+    fetchStaffFromJikan(),
+    fetchJikanStaff()
+  ]);
+  const sections: string[] = [];
+  if (cast) sections.push(cast);
+  if (staff) sections.push(staff);
+  return sections.length > 0 ? sections.join('\n\n') : undefined;
+}
+
+async function fetchAniListDescription(): Promise<string | undefined> {
+  try {
+    const mediaId = await resolveAniListMediaId();
+    if (!mediaId) return undefined;
+
+    const query = `
+      query ($id: Int) {
+        Media(id: $id, type: ANIME) {
+          description(asHtml: false)
+        }
+      }
+    `;
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ query, variables: { id: mediaId } }),
+    });
+    if (!res.ok) return undefined;
+    const payload = (await res.json()) as { data?: { Media?: { description?: string } } };
+    return payload.data?.Media?.description || undefined;
+  } catch {
+    return undefined;
   }
+}
 
-  const airingAt = fromJikan?.airingAt ?? fromAniList?.airingAt ?? fromKitsu?.airingAt;
-  if (airingAt !== undefined) {
-    merged.airingAt = airingAt;
-  }
+function isValidSynopsis(text?: string): boolean {
+  if (!isMeaningfulText(text)) return false;
+  if (text.toLowerCase().includes('wikipedia')) return false;
+  return true;
+}
 
-  const totalEpisodes = fromJikan?.totalEpisodes ?? fromAniList?.totalEpisodes ?? fromKitsu?.totalEpisodes;
-  if (totalEpisodes !== undefined) {
-    merged.totalEpisodes = totalEpisodes;
-  }
-
-  const episodeStaff = fromAniList?.episodeStaff ?? fromJikan?.episodeStaff ?? fromKitsu?.episodeStaff;
-  if (isMeaningfulText(episodeStaff)) {
-    merged.episodeStaff = episodeStaff;
-  }
-
-  const previousEpisodeLink = fromJikan?.previousEpisodeLink ?? fromAniList?.previousEpisodeLink ?? fromKitsu?.previousEpisodeLink;
-  if (isMeaningfulText(previousEpisodeLink)) {
-    merged.previousEpisodeLink = previousEpisodeLink;
-  }
-
-  const jstTime = fromJikan?.jstTime ?? fromAniList?.jstTime ?? fromKitsu?.jstTime;
-  if (isMeaningfulText(jstTime)) {
-    merged.jstTime = jstTime;
-  }
-
-  const etTime = fromJikan?.etTime ?? fromAniList?.etTime ?? fromKitsu?.etTime;
-  if (isMeaningfulText(etTime)) {
-    merged.etTime = etTime;
-  }
-
-  const cestTime = fromJikan?.cestTime ?? fromAniList?.cestTime ?? fromKitsu?.cestTime;
-  if (isMeaningfulText(cestTime)) {
-    merged.cestTime = cestTime;
-  }
-
-  return merged;
+function cleanSynopsisSource(text: string): string {
+  return text.replace(/\s*(\(Source:[^)]+\))/gi, ' $1').trim();
 }
 
 async function getEpisodeMetadata(episodeNumber: number): Promise<ExternalEpisodePayload | null> {
@@ -1135,34 +1330,112 @@ async function getEpisodeMetadata(episodeNumber: number): Promise<ExternalEpisod
     return await getMockEpisodeMetadata(episodeNumber);
   }
 
-  const [fromJikan, fromAniList, fromKitsu] = await Promise.all([
-    maybeFetchEpisodeInfoFromJikan(episodeNumber),
-    maybeFetchEpisodeInfoFromAniList(episodeNumber),
-    maybeFetchEpisodeInfoFromKitsu(episodeNumber),
+  // Fetch Kitsu, AniList and Wikipedia in parallel
+  const [kitsu, aniList, wikipedia] = await Promise.all([
+    fetchFromKitsu(episodeNumber),
+    fetchFromAniList(episodeNumber),
+    fetchFromWikipedia(episodeNumber),
   ]);
 
-  const merged = mergeEpisodeMetadata(episodeNumber, fromJikan, fromAniList, fromKitsu);
-  const needsWikipediaTitle = !isMeaningfulText(merged?.title);
-  const needsWikipediaCast = !isMeaningfulText(merged?.episodeStaff) || merged?.episodeStaff === DEFAULT_EPISODE_STAFF;
-  if (!needsWikipediaTitle && !needsWikipediaCast) {
-    return merged;
+  const merged: ExternalEpisodePayload = {
+    episode: episodeNumber,
+  };
+
+  // 1. Episode Title Sourcing
+  if (kitsu.online) {
+    merged.title = kitsu.data?.title ?? 'TBA';
+  } else {
+    // Wikipedia fallback when Kitsu is down
+    merged.title = wikipedia.data?.title ?? 'TBA';
   }
 
-  const fromWikipedia = await maybeFetchEpisodeInfoFromWikipedia(episodeNumber);
-  if (!fromWikipedia) {
-    return merged;
+  // 2. Episode Synopsis Sourcing
+  if (kitsu.online) {
+    merged.synopsis = kitsu.data?.synopsis ?? 'TBA';
+  } else {
+    // Fallback: AniList/Jikan shorter synopsis when Kitsu is down
+    let fallbackSynopsis = 'TBA';
+    const [jikanRes, aniListDesc] = await Promise.all([
+      fetchFromJikan(episodeNumber),
+      fetchAniListDescription(),
+    ]);
+    const jikanSyn = isValidSynopsis(jikanRes.synopsis) ? jikanRes.synopsis : undefined;
+    const aniListSyn = isValidSynopsis(aniListDesc) ? aniListDesc : undefined;
+
+    if (jikanSyn && aniListSyn) {
+      fallbackSynopsis = jikanSyn.length < aniListSyn.length ? jikanSyn : aniListSyn;
+    } else if (jikanSyn) {
+      fallbackSynopsis = jikanSyn;
+    } else if (aniListSyn) {
+      fallbackSynopsis = aniListSyn;
+    }
+    merged.synopsis = fallbackSynopsis;
   }
 
-  if (!merged) {
-    return fromWikipedia;
+  // 3. Airing Time (used for verify/airing checks)
+  if (kitsu.online && kitsu.data?.airingAt) {
+    merged.airingAt = kitsu.data.airingAt;
+  } else {
+    // Fallback to weekly schedule when Kitsu is down
+    const scheduled = await computeAiringDateUtc(episodeNumber);
+    merged.airingAt = scheduled.toISOString();
   }
 
-  if (needsWikipediaTitle && isMeaningfulText(fromWikipedia.title)) {
-    merged.title = fromWikipedia.title;
+  // 4. Total Episodes
+  const total = kitsu.data?.totalEpisodes ?? aniList.data?.totalEpisodes;
+  if (total) {
+    merged.totalEpisodes = total;
   }
 
-  if (needsWikipediaCast && isMeaningfulText(fromWikipedia.episodeStaff)) {
-    merged.episodeStaff = fromWikipedia.episodeStaff;
+  // 5. Cast and Staff Merging
+  let jpCastAndStaff: string | undefined;
+  if (aniList.online) {
+    jpCastAndStaff = aniList.data?.episodeStaff;
+  } else {
+    // Fallback JP Cast: Jikan, or if Jikan is down, Wikipedia
+    const jikanStaff = await fetchJikanEpisodeStaff();
+    if (jikanStaff) {
+      jpCastAndStaff = jikanStaff;
+    } else {
+      jpCastAndStaff = wikipedia.data?.episodeStaff;
+    }
+  }
+
+  let enCastBlock: string | undefined;
+  if (wikipedia.online) {
+    enCastBlock = wikipedia.data?.episodeStaff;
+  }
+
+  let finalEpisodeStaff = DEFAULT_EPISODE_STAFF;
+  if (jpCastAndStaff && enCastBlock) {
+    finalEpisodeStaff = mergeCastBlocks(jpCastAndStaff, enCastBlock) || DEFAULT_EPISODE_STAFF;
+  } else if (jpCastAndStaff) {
+    finalEpisodeStaff = jpCastAndStaff;
+  } else if (enCastBlock) {
+    finalEpisodeStaff = enCastBlock;
+  }
+
+  // Store in Redis if successfully resolved and non-default
+  if (finalEpisodeStaff !== DEFAULT_EPISODE_STAFF && isMeaningfulText(finalEpisodeStaff)) {
+    try {
+      await redis.set(REDIS_KEY_LAST_CAST_AND_STAFF, finalEpisodeStaff);
+    } catch (err) {
+      console.error('[cron] Failed to cache cast and staff in Redis:', err);
+    }
+    merged.episodeStaff = finalEpisodeStaff;
+  } else {
+    // Fallback: Redis cache, or HARDCODED_CAST_AND_STAFF if Redis is empty
+    let cachedStaff: string | undefined = undefined;
+    try {
+      cachedStaff = await redis.get(REDIS_KEY_LAST_CAST_AND_STAFF);
+    } catch (err) {
+      console.error('[cron] Failed to fetch cached cast and staff:', err);
+    }
+    merged.episodeStaff = cachedStaff || HARDCODED_CAST_AND_STAFF;
+  }
+
+  if (merged.synopsis !== undefined) {
+    merged.synopsis = cleanSynopsisSource(merged.synopsis);
   }
 
   return merged;
@@ -1320,26 +1593,15 @@ export async function buildEpisodePayload(episodeNumber: number): Promise<Episod
   const external = await getEpisodeMetadata(episodeNumber);
   const subredditName = await getSubredditName();
 
-  let airingDate = await computeAiringDateUtc(episodeNumber);
-  const externalAiringRaw = external?.airingAt;
-  if (externalAiringRaw) {
-    if (typeof externalAiringRaw === 'number') {
-      airingDate = new Date(externalAiringRaw > 10_000_000_000 ? externalAiringRaw : externalAiringRaw * 1000);
-    } else {
-      const parsed = new Date(externalAiringRaw);
-      if (!Number.isNaN(parsed.getTime())) {
-        airingDate = parsed;
-      }
-    }
-  }
+  const scheduledAiringDate = await computeAiringDateUtc(episodeNumber);
 
   return {
     episodeNumber: external?.episodeNumber ?? external?.episode ?? external?.number ?? episodeNumber,
     episodeTitle: external?.episodeTitle ?? external?.title ?? 'TBA',
     synopsis: external?.synopsis ?? external?.summary ?? 'TBA',
-    jstTime: external?.jstTime ?? formatTimeInZone(airingDate, 'Asia/Tokyo'),
-    etTime: external?.etTime ?? formatTimeInZone(airingDate, ET_TIME_ZONE),
-    cestTime: external?.cestTime ?? formatTimeInZone(airingDate, 'Europe/Paris'),
+    jstTime: external?.jstTime ?? formatTimeInZone(scheduledAiringDate, 'Asia/Tokyo'),
+    etTime: external?.etTime ?? formatTimeInZone(scheduledAiringDate, ET_TIME_ZONE),
+    cestTime: external?.cestTime ?? formatTimeInZone(scheduledAiringDate, 'Europe/Paris'),
     episodeStaff: external?.episodeStaff ?? DEFAULT_EPISODE_STAFF,
     previousEpisodeLink: external?.previousEpisodeLink ?? (await buildPreviousEpisodeLink(episodeNumber, subredditName)),
     nextEpisodeLink: await buildNextEpisodeLink(episodeNumber, subredditName),
@@ -1497,11 +1759,15 @@ async function verifyEpisodeIsAired(episodeNumber: number): Promise<boolean> {
     return true;
   }
   try {
-    const [fromJikan, fromAniList, fromKitsu] = await Promise.all([
-      maybeFetchEpisodeInfoFromJikan(episodeNumber).catch(() => null),
-      maybeFetchEpisodeInfoFromAniList(episodeNumber).catch(() => null),
-      maybeFetchEpisodeInfoFromKitsu(episodeNumber).catch(() => null),
+    const [jikan, aniList, kitsu] = await Promise.all([
+      fetchFromJikan(episodeNumber).catch(() => ({ online: false, title: undefined, synopsis: undefined })),
+      fetchFromAniList(episodeNumber).catch(() => ({ online: false, data: null })),
+      fetchFromKitsu(episodeNumber).catch(() => ({ online: false, data: null })),
     ]);
+
+    const fromJikan = jikan.online ? jikan : null;
+    const fromAniList = aniList.online ? aniList.data : null;
+    const fromKitsu = kitsu.online ? kitsu.data : null;
 
     console.log(
       `[cron] Verifying release for episode ${String(episodeNumber)}. Jikan=${String(!!fromJikan)} AniList=${String(!!fromAniList)} Kitsu=${String(!!fromKitsu)}`
@@ -1626,6 +1892,8 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
   const now = new Date();
 
   try {
+
+
     const mockModeEnabled = await isMockModeEnabled();
     console.log(
       `[cron] postCurrentEpisodeDiscussion start force=${String(force)} mockMode=${String(mockModeEnabled)} now=${now.toISOString()}`

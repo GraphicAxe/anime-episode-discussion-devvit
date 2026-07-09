@@ -4,6 +4,7 @@ import { serve } from '@hono/node-server';
 import { logger } from 'hono/logger';
 import { createServer, getServerPort } from '@devvit/web/server';
 import { settings } from '@devvit/settings';
+
 import { api } from './routes/api';
 import { triggers } from './routes/triggers';
 import { cron, postCurrentEpisodeDiscussion } from './routes/cron';
@@ -36,6 +37,8 @@ Devvit.addSettings([
   },
 ]);
 
+
+
 const app = new Hono();
 let startupMockCheckDone = false;
 
@@ -55,6 +58,10 @@ app.use('*', async (_c, next) => {
         apiPlaytestModeRaw === '1' ||
         apiPlaytestModeRaw === 'yes' ||
         apiPlaytestModeRaw === 'on';
+
+
+
+
 
       if (mockModeEnabled) {
         const result = await postCurrentEpisodeDiscussion({ force: true });
