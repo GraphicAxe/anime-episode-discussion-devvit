@@ -45,59 +45,125 @@ const REDIS_KEY_LAST_POSTED_ET_DATE = 'last_posted_et_date';
 const REDIS_KEY_EPISODE_POST_ID_PREFIX = 'episode_post_id_';
 const REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX = 'episode_post_permalink_';
 const REDIS_KEY_LAST_CAST_AND_STAFF = 'last_successful_cast_and_staff';
+const REDIS_KEY_PENDING_RETRY_EPISODE = 'pending_retry_episode';
 
 const SERIES_TITLE = 'Goodbye, Lara';
 const POST_TITLE_TEMPLATE = 'Goodbye, Lara - Episode {EPISODE_NUMBER} Discussion';
 const PREMIERE_DATE_ET = '2026-07-05';
 const PREMIERE_EPISODE_NUMBER = 1;
 const POSTING_WINDOW_START_ET = '10:30';
-const POSTING_WINDOW_END_ET = '10:45';
 const DEFAULT_AIRING_TIME_ET = '11:30';
 const DEFAULT_EPISODE_STAFF = 'TBA';
-const INITIAL_LAST_POSTED_EPISODE_NUMBER = 1;
-const EPISODE_ONE_DISCUSSION_URL = 'https://www.reddit.com/r/GoodbyeLara/comments/1uo5xv4/goodbye_lara_episode_1_discussion/';
+
+const MANUAL_EPISODE_POSTS: Record<number, string> = {
+  1: 'https://www.reddit.com/r/GoodbyeLara/comments/1uo5xv4/goodbye_lara_episode_1_discussion/',
+  2: 'https://www.reddit.com/r/GoodbyeLara/comments/1uuj2b0/goodbye_lara_episode_2_discussion/',
+};
+
 const DISCUSSION_FLAIR_ID = '45a92b8e-7724-11f1-aa18-6e578d5a10fa';
 const JIKAN_ANIME_ID = '58878';
 const ANILIST_MEDIA_ID = '177637';
 const KITSU_ANIME_ID = '48880';
 const WIKIPEDIA_PAGE_TITLE = 'Goodbye,_Lara';
 const DEFAULT_MAX_EPISODES = 13;
-const MOCK_EPISODE_TITLE = 'Episode';
-const MOCK_EPISODE_SYNOPSIS =
-  'Long, long ago, there lived a mermaid princess named Lara. She was raised with love by her father, the king of sea and her sisters. One day, Lara fell in love with a human prince who lived on land. It was a forbidden love-one that was not allowed in the world of mermaids. Still, Lara journeyed to the surface. With a potion, given to her from the witch Grace, she became human. But the potion came at a cost-fail to find true love, and she would turn into foam and vanish into the ocean. Though she was a princess of the sea, Lara chose love. Yet, her wish went unfulfilled and she vanished into the sea. Two hundred years later, Lara awakens once more, in Lake Biwa to finally search for her true love.';
-const MOCK_EPISODE_STAFF = `**Cast (EN/JP)**
-- Lara - (EN: TBA / JP: Hishikawa, Hana)
-- Ootsu, Mari - (EN: TBA / JP: Kawaishi, Nana)
-- Grace - (EN: TBA / JP: Fukami, Rica)
-- Luca - (EN: TBA / JP: Murase, Ayumu)
-- Ootsu, Ema - (EN: TBA / JP: Sumitomo, Nanae)
 
-**Staff (JP source)**
-- Studio: Kinema Citrus
-- Producer: Kadokawa
-- Episode staff credits: TBA`;
+interface CastMember {
+  character: string;
+  enActor: string;
+  jpActor: string;
+}
 
-const HARDCODED_CAST_AND_STAFF = `**Cast (EN/JP)**
-- Lara - (EN: Brianna Knickerbocker / JP: Hana Hishikawa)
-- Mari Otsu - (EN: Anairis Quinones / JP: Nana Kawaishi)
-- Grace - (EN: Tiana Camacho / JP: Rica Fukami)
-- Luca - (EN: Kieran Regan / JP: Ayumu Murase)
-- Yoshihiro Otsu - (EN: TBA / JP: Tomohiro Ōno)
-- Ema Otsu - (EN: TBA / JP: Nanae Sumitomo)
-- Rowan - (EN: Brook Chalmers / JP: Masaki Terasoma)
-- Lisa - (EN: Cat Protano / JP: Minami Tsuda)
+interface StaffMember {
+  role: string;
+  name: string;
+}
 
-**Staff (JP source)**
-- Director: Takushi Koide
-- Series Composition: Anna Kawahara
-- Character Design: Shiori Tani
-- Music: Yuma Yamaguchi`;
+const HARDCODED_CAST: CastMember[] = [
+  { character: 'Lara', enActor: 'Brianna Knickerbocker', jpActor: 'Hana Hishikawa' },
+  { character: 'Mari Otsu', enActor: 'Anairis Quiñones', jpActor: 'Nana Kawaishi' },
+  { character: 'Luca', enActor: 'Kieran Regan', jpActor: 'Ayumu Murase' },
+  { character: 'Grace', enActor: 'Tiana Camacho', jpActor: 'Rica Fukami' },
+  { character: 'Luna', enActor: 'Madeline Dorroh', jpActor: 'Honoka Inoue' },
+  { character: 'Lisa', enActor: 'Cat Protano', jpActor: 'Minami Tsuda' },
+  { character: 'Rowan', enActor: 'Brook Chalmers', jpActor: 'Masaki Terasoma' },
+  { character: 'Laura', enActor: 'Tara Sands', jpActor: 'Umeka Shōji' },
+  { character: 'Fish', enActor: 'Jonathon Ha', jpActor: 'TBA' },
+  { character: 'Ema Otsu', enActor: 'TBA', jpActor: 'Nanae Sumitomo' },
+  { character: 'Makoto Otsu', enActor: 'TBA', jpActor: 'Mitsuaki Madono' },
+  { character: 'Yoshihiro Otsu', enActor: 'TBA', jpActor: 'Tomohiro Ōno' },
+  { character: 'Kota', enActor: 'TBA', jpActor: 'Kazutomi Yamamoto' }
+];
+
+const HARDCODED_STAFF: StaffMember[] = [
+  { role: 'Director', name: 'Takushi Koide' },
+  { role: 'Series Composition', name: 'Anna Kawahara' },
+  { role: 'Character Design', name: 'Shiori Tani' },
+  { role: 'Music', name: 'Yuma Yamaguchi' },
+  { role: 'Art Director', name: 'Mari Fujino' },
+  { role: 'Sound Director', name: 'Haru Yamada' },
+  { role: 'Director of Photography', name: 'Kazuto Izumita' }
+];
+
+function buildHardcodedCastAndStaffMarkdown(): string {
+  const castLines = HARDCODED_CAST.map(
+    (c) => `- ${c.character} - (EN: ${c.enActor} / JP: ${c.jpActor})`
+  );
+  const staffLines = HARDCODED_STAFF.map(
+    (s) => `- ${s.role}: ${s.name}`
+  );
+  return `**Cast (EN/JP)**\n${castLines.join('\n')}\n\n**Staff (JP)**\n${staffLines.join('\n')}`;
+}
+
+function resolveEnglishVoiceActor(characterName: string): string {
+  const norm = characterName.toLowerCase().replace(/[^a-z]/g, '');
+  if (norm.length === 0) return 'TBA';
+
+  for (const c of HARDCODED_CAST) {
+    const normKey = c.character.toLowerCase().replace(/[^a-z]/g, '');
+    // Exact match
+    if (norm === normKey) {
+      return c.enActor;
+    }
+    // Substring match only if both strings are at least 3 chars to prevent false positives
+    if (norm.length >= 3 && normKey.length >= 3) {
+      if (norm.includes(normKey) || normKey.includes(norm)) {
+        return c.enActor;
+      }
+    }
+  }
+  // Hardcoded aliases for searchability
+  if (norm.includes('mariotsu') || (norm.includes('otsu') && norm.includes('mari'))) {
+    const mari = HARDCODED_CAST.find(c => c.character === 'Mari Otsu');
+    if (mari) return mari.enActor;
+  }
+  if (norm.includes('risa') || norm.includes('lisa')) {
+    const lisa = HARDCODED_CAST.find(c => c.character === 'Lisa');
+    if (lisa) return lisa.enActor;
+  }
+  return 'TBA';
+}
 
 let cachedAniListMediaId: number | null | undefined;
 let cachedWikipediaCharactersSection: string | null | undefined;
 let cachedWikipediaEpisodesSection: string | null | undefined;
 let cachedWikipediaCharactersSectionIndex: number | null | undefined;
 let cachedWikipediaEpisodesSectionIndex: number | null | undefined;
+
+const episodeMetadataCache: Record<number, ExternalEpisodePayload | null> = {};
+let cachedTotalEpisodes: number | null | undefined;
+
+function clearInMemoryCaches(): void {
+  cachedAniListMediaId = undefined;
+  cachedWikipediaCharactersSection = undefined;
+  cachedWikipediaEpisodesSection = undefined;
+  cachedWikipediaCharactersSectionIndex = undefined;
+  cachedWikipediaEpisodesSectionIndex = undefined;
+  cachedTotalEpisodes = undefined;
+  for (const key of Object.keys(episodeMetadataCache)) {
+    delete episodeMetadataCache[Number(key)];
+  }
+}
+
 
 type WikipediaSection = {
   toclevel: number;
@@ -260,9 +326,7 @@ async function getSeriesTitle(): Promise<string> {
   return SERIES_TITLE;
 }
 
-async function hasEpisodeOneDiscussionUrl(): Promise<boolean> {
-  return EPISODE_ONE_DISCUSSION_URL.trim().length > 0;
-}
+
 
 async function getPostTitleTemplate(): Promise<string> {
   return POST_TITLE_TEMPLATE;
@@ -288,7 +352,7 @@ function getTimePartsInET(now: Date) {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hourCycle: 'h23',
   });
 
   const parts = formatter.formatToParts(now);
@@ -334,12 +398,10 @@ async function isScheduledWindowNow(now: Date): Promise<boolean> {
   const scheduledWeekday = await getScheduledWeekdayEt();
   const isPostingDay = et.weekday === scheduledWeekday;
   const start = parseTimeHHMM(POSTING_WINDOW_START_ET, POSTING_WINDOW_START_ET);
-  const end = parseTimeHHMM(POSTING_WINDOW_END_ET, POSTING_WINDOW_END_ET);
 
   const nowMinutes = localTimeToMinutes(et.hour, et.minute);
   const startMinutes = localTimeToMinutes(start.hour, start.minute);
-  const endMinutes = localTimeToMinutes(end.hour, end.minute);
-  const isInWindow = nowMinutes >= startMinutes && nowMinutes < endMinutes;
+  const isInWindow = nowMinutes >= startMinutes;
 
   return isPostingDay && isInWindow;
 }
@@ -360,6 +422,12 @@ async function getSubredditName(): Promise<string> {
     throw new Error('No installed subreddit found. Install the app to a subreddit before running scheduler tasks.');
   }
   return installed;
+}
+
+
+
+async function getManualEpisodePost(ep: number): Promise<string | undefined> {
+  return MANUAL_EPISODE_POSTS[ep];
 }
 
 
@@ -386,7 +454,7 @@ function getZoneParts(date: Date, timeZone: string): { year: number; month: numb
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hourCycle: 'h23',
   });
 
   const parts = formatter.formatToParts(date);
@@ -474,21 +542,9 @@ async function computeAiringDateUtc(episodeNumber: number): Promise<Date> {
   return zonedTimeToUtc(episodeDateEt, airingEt, ET_TIME_ZONE);
 }
 
-async function isMockModeEnabled(): Promise<boolean> {
-  const raw = ((await settings.get<string>('mockMode')) || 'false').toLowerCase();
+async function isApiPlaytestModeEnabled(): Promise<boolean> {
+  const raw = ((await settings.get<string>('apiPlaytestMode')) || 'false').toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
-}
-
-async function getMockEpisodeMetadata(episodeNumber: number): Promise<ExternalEpisodePayload> {
-  const airingDate = await computeAiringDateUtc(episodeNumber);
-
-  return {
-    episode: episodeNumber,
-    title: `${MOCK_EPISODE_TITLE} ${String(episodeNumber)}`,
-    synopsis: MOCK_EPISODE_SYNOPSIS,
-    episodeStaff: MOCK_EPISODE_STAFF,
-    airingAt: airingDate.getTime(),
-  };
 }
 
 function isMeaningfulText(value?: string): value is string {
@@ -641,9 +697,11 @@ function mergeCastBlocks(primaryBlock?: string, secondaryBlock?: string): string
     resultLines.push(`- ${c.character} - (EN: ${c.en} / JP: ${c.jp})`);
   }
 
-  if (staffLines.length > 0) {
+  // Filter out empty/whitespace-only lines to prevent junk in output
+  const cleanedStaffLines = staffLines.filter(line => line.trim().length > 0);
+  if (cleanedStaffLines.length > 0) {
     resultLines.push('');
-    resultLines.push(...staffLines);
+    resultLines.push(...cleanedStaffLines);
   }
 
   return resultLines.join('\n');
@@ -805,7 +863,10 @@ function extractWikipediaCastBlock(wikitext: string): string | undefined {
       if (voicedByMatch && voicedByMatch[1]) {
         const parts = voicedByMatch[1].split('|').map((p) => cleanWikipediaText(p.trim()));
         const jpActor = parts[0] || 'TBA';
-        const enActor = parts[1] || 'TBA';
+        let enActor = parts[1] || 'TBA';
+        if (enActor === 'TBA' && currentCharacter) {
+          enActor = resolveEnglishVoiceActor(currentCharacter);
+        }
 
         castLines.push(`- ${currentCharacter} - (EN: ${enActor} / JP: ${jpActor})`);
         currentCharacter = null; // Reset for next character
@@ -828,11 +889,14 @@ function extractWikipediaCastBlock(wikitext: string): string | undefined {
 
           const jpActor = cleanWikipediaText(jpMatch?.[1] ?? '');
           const enActorRaw = cleanWikipediaText(enMatch?.[1] ?? '');
-          const enActor =
+          let enActor =
             isMeaningfulText(enActorRaw) &&
             (!isMeaningfulText(jpActor) || normalizeName(enActorRaw) !== normalizeName(jpActor))
               ? enActorRaw
               : 'TBA';
+          if (enActor === 'TBA' && characterName) {
+            enActor = resolveEnglishVoiceActor(characterName);
+          }
           const jpDisplay = isMeaningfulText(jpActor) ? jpActor : 'TBA';
 
           castLines.push(`- ${characterName} - (EN: ${enActor} / JP: ${jpDisplay})`);
@@ -1026,9 +1090,14 @@ async function fetchFromAniList(episodeNumber: number): Promise<{ online: boolea
       result.airingAt = nextAiring.airingAt * 1000;
     }
 
-    const streamingTitle = media.streamingEpisodes?.[episodeNumber - 1]?.title;
+    // Search for a matching episode title by parsing "Episode N" from the title string
+    const streamingEpisodes = media.streamingEpisodes ?? [];
+    const epPattern = new RegExp(`Episode\\s+${String(episodeNumber)}\\b`, 'i');
+    const streamingMatch = streamingEpisodes.find((se) => epPattern.test(se.title ?? ''));
+    const streamingTitle = streamingMatch?.title ?? streamingEpisodes[episodeNumber - 1]?.title;
     if (isMeaningfulText(streamingTitle)) {
-      result.title = streamingTitle;
+      // Strip the "Episode N - " prefix if present to get just the title
+      result.title = streamingTitle.replace(/^Episode\s+\d+\s*-\s*/i, '').trim() || streamingTitle;
     }
 
     // Format JP cast & staff only
@@ -1040,7 +1109,8 @@ async function fetchFromAniList(episodeNumber: number): Promise<{ online: boolea
         if (!isMeaningfulText(characterName) || !isMeaningfulText(jpActor)) {
           return undefined;
         }
-        return `${characterName} - (EN: TBA / JP: ${jpActor})`;
+        const enActor = resolveEnglishVoiceActor(characterName);
+        return `${characterName} - (EN: ${enActor} / JP: ${jpActor})`;
       })
       .filter((v): v is string => isMeaningfulText(v))
       .slice(0, 5);
@@ -1062,7 +1132,7 @@ async function fetchFromAniList(episodeNumber: number): Promise<{ online: boolea
         sections.push(`**Cast (EN/JP)**\n${castEntries.map(l => `- ${l}`).join('\n')}`);
       }
       if (staffEntries.length > 0) {
-        sections.push(`**Staff (JP source)**\n${staffEntries.map(l => `- ${l}`).join('\n')}`);
+        sections.push(`**Staff (JP)**\n${staffEntries.map(l => `- ${l}`).join('\n')}`);
       }
       result.episodeStaff = sections.join('\n\n');
     }
@@ -1144,7 +1214,14 @@ async function fetchFromKitsu(episodeNumber: number): Promise<{ online: boolean;
         }
 
         if (attributes.airdate !== undefined && isMeaningfulText(attributes.airdate)) {
-          result.airingAt = attributes.airdate;
+          // Normalize date string to Unix ms for consistent typing
+          try {
+            const airdateUtc = zonedTimeToUtc(attributes.airdate, DEFAULT_AIRING_TIME_ET, ET_TIME_ZONE);
+            result.airingAt = airdateUtc.getTime();
+          } catch {
+            // Fallback: store as ISO string if parsing fails
+            result.airingAt = attributes.airdate;
+          }
         }
       }
 
@@ -1159,18 +1236,27 @@ async function fetchFromKitsu(episodeNumber: number): Promise<{ online: boolean;
 }
 
 async function maybeFetchTotalEpisodesFromJikan(): Promise<number | null> {
+  if (cachedTotalEpisodes !== undefined) {
+    return cachedTotalEpisodes;
+  }
+
   const malId = JIKAN_ANIME_ID;
-  if (!malId) return null;
+  if (!malId) {
+    cachedTotalEpisodes = null;
+    return null;
+  }
 
   const url = `https://api.jikan.moe/v4/anime/${malId}`;
   const res = await fetch(url);
   if (!res.ok) {
     console.error(`[cron] Jikan anime request failed: ${await readErrorSummary(res)}`);
+    cachedTotalEpisodes = null;
     return null;
   }
 
   const payload = (await res.json()) as { data?: { episodes?: number } };
-  return payload.data?.episodes ?? null;
+  cachedTotalEpisodes = payload.data?.episodes ?? null;
+  return cachedTotalEpisodes;
 }
 
 async function fetchFromJikan(episodeNumber: number): Promise<{ online: boolean; title?: string | undefined; synopsis?: string | undefined }> {
@@ -1268,7 +1354,7 @@ async function fetchJikanStaff(): Promise<string | undefined> {
     }
 
     if (staffLines.length > 0) {
-      return `**Staff (JP source)**\n${staffLines.join('\n')}`;
+      return `**Staff (JP)**\n${staffLines.join('\n')}`;
     }
   } catch (err) {
     console.error('[cron] Jikan staff fetch failed:', err);
@@ -1277,10 +1363,9 @@ async function fetchJikanStaff(): Promise<string | undefined> {
 }
 
 async function fetchJikanEpisodeStaff(): Promise<string | undefined> {
-  const [cast, staff] = await Promise.all([
-    fetchStaffFromJikan(),
-    fetchJikanStaff()
-  ]);
+  // Sequential calls to avoid exceeding Jikan's 3 req/s unauthenticated rate limit
+  const cast = await fetchStaffFromJikan();
+  const staff = await fetchJikanStaff();
   const sections: string[] = [];
   if (cast) sections.push(cast);
   if (staff) sections.push(staff);
@@ -1326,8 +1411,8 @@ function cleanSynopsisSource(text: string): string {
 }
 
 async function getEpisodeMetadata(episodeNumber: number): Promise<ExternalEpisodePayload | null> {
-  if (await isMockModeEnabled()) {
-    return await getMockEpisodeMetadata(episodeNumber);
+  if (episodeMetadataCache[episodeNumber] !== undefined) {
+    return episodeMetadataCache[episodeNumber];
   }
 
   // Fetch Kitsu, AniList and Wikipedia in parallel
@@ -1373,12 +1458,15 @@ async function getEpisodeMetadata(episodeNumber: number): Promise<ExternalEpisod
   }
 
   // 3. Airing Time (used for verify/airing checks)
-  if (kitsu.online && kitsu.data?.airingAt) {
+  // Prefer AniList's nextAiringEpisode timestamp (most reliable), then Kitsu, then computed schedule
+  if (aniList.online && aniList.data?.airingAt && typeof aniList.data.airingAt === 'number') {
+    merged.airingAt = aniList.data.airingAt;
+  } else if (kitsu.online && kitsu.data?.airingAt && typeof kitsu.data.airingAt === 'number') {
     merged.airingAt = kitsu.data.airingAt;
   } else {
-    // Fallback to weekly schedule when Kitsu is down
+    // Fallback to weekly schedule when APIs are down or don't have airing info
     const scheduled = await computeAiringDateUtc(episodeNumber);
-    merged.airingAt = scheduled.toISOString();
+    merged.airingAt = scheduled.getTime();
   }
 
   // 4. Total Episodes
@@ -1431,13 +1519,14 @@ async function getEpisodeMetadata(episodeNumber: number): Promise<ExternalEpisod
     } catch (err) {
       console.error('[cron] Failed to fetch cached cast and staff:', err);
     }
-    merged.episodeStaff = cachedStaff || HARDCODED_CAST_AND_STAFF;
+    merged.episodeStaff = cachedStaff || buildHardcodedCastAndStaffMarkdown();
   }
 
   if (merged.synopsis !== undefined) {
     merged.synopsis = cleanSynopsisSource(merged.synopsis);
   }
 
+  episodeMetadataCache[episodeNumber] = merged;
   return merged;
 }
 
@@ -1468,6 +1557,18 @@ async function findEpisodeDiscussionPostPermalink(subredditName: string, episode
   const redisPermalink = await redis.get(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${episodeNumber}`);
   if (redisPermalink) return redisPermalink;
 
+  const manualUrl = await getManualEpisodePost(episodeNumber);
+  if (manualUrl) {
+    try {
+      const parsedUrl = new URL(manualUrl);
+      const permalink = parsedUrl.pathname;
+      await redis.set(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${episodeNumber}`, permalink);
+      return permalink;
+    } catch {
+      // fallback to list scan if URL parsing fails
+    }
+  }
+
   const listing = reddit.getNewPosts({ subredditName, limit: 100, pageSize: 100 });
   const posts = await listing.all();
   const exactTitle = (await buildDiscussionTitle(episodeNumber)).toLowerCase();
@@ -1487,11 +1588,9 @@ async function buildPreviousEpisodeLink(episodeNumber: number, subredditName: st
 
   const previousEpisodeNumber = episodeNumber - 1;
 
-  if (previousEpisodeNumber === 1) {
-    const episodeOneUrl = EPISODE_ONE_DISCUSSION_URL;
-    if (episodeOneUrl) {
-      return `[Episode 1 discussion](${episodeOneUrl})`;
-    }
+  const manualUrl = await getManualEpisodePost(previousEpisodeNumber);
+  if (manualUrl) {
+    return `[Episode ${previousEpisodeNumber} discussion](${manualUrl})`;
   }
 
   const permalink = await findEpisodeDiscussionPostPermalink(subredditName, previousEpisodeNumber);
@@ -1514,7 +1613,18 @@ async function reconcileExistingEpisodeDiscussionPost(episodeNumber: number): Pr
     return { updated: false };
   }
 
-  const storedPost = await reddit.getPostById(storedPostId as `t3_${string}`);
+  let storedPost;
+  try {
+    storedPost = await reddit.getPostById(storedPostId as `t3_${string}`);
+  } catch (err) {
+    // Post was deleted externally (e.g., by a moderator). Clean up stale Redis keys
+    // so the flow falls through to create a new post.
+    console.error(`[cron] Stored post ${storedPostId} for episode ${String(episodeNumber)} not found (likely deleted). Cleaning up Redis keys.`, err);
+    await redis.del(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${episodeNumber}`);
+    await redis.del(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${episodeNumber}`);
+    return { updated: false };
+  }
+
   if (!storedPost.body) {
     return { updated: false, postId: storedPost.id, permalink: storedPost.permalink };
   }
@@ -1539,6 +1649,10 @@ async function reconcileExistingEpisodeDiscussionPost(episodeNumber: number): Pr
 }
 
 async function buildNextEpisodeLink(episodeNumber: number, subredditName: string): Promise<string> {
+  const maxEpisodes = await getConfiguredOrApiMaxEpisodes(episodeNumber);
+  if (maxEpisodes !== null && episodeNumber >= maxEpisodes) {
+    return 'N/A (Season Finished)';
+  }
   const nextEpisodeNumber = episodeNumber + 1;
   const permalink = await findEpisodeDiscussionPostPermalink(subredditName, nextEpisodeNumber);
   if (!permalink) {
@@ -1548,7 +1662,7 @@ async function buildNextEpisodeLink(episodeNumber: number, subredditName: string
 }
 
 export async function buildArchiveGrid(currentEpisodeNumber: number, subredditName: string): Promise<string> {
-  const maxEpisodes = 13;
+  const maxEpisodes = (await getConfiguredOrApiMaxEpisodes(currentEpisodeNumber)) || 13;
   const episodeCells: string[] = [];
 
   for (let ep = 1; ep <= maxEpisodes; ep++) {
@@ -1556,13 +1670,16 @@ export async function buildArchiveGrid(currentEpisodeNumber: number, subredditNa
       episodeCells.push(`${ep} (TBA)`);
       continue;
     }
-    const permalink = await findEpisodeDiscussionPostPermalink(subredditName, ep);
-    if (permalink) {
-      episodeCells.push(`[${ep}](https://reddit.com${permalink})`);
-    } else if (ep === 1 && EPISODE_ONE_DISCUSSION_URL) {
-      episodeCells.push(`[1](${EPISODE_ONE_DISCUSSION_URL})`);
+    const manualUrl = await getManualEpisodePost(ep);
+    if (manualUrl) {
+      episodeCells.push(`[${ep}](${manualUrl})`);
     } else {
-      episodeCells.push(`${ep} (TBA)`);
+      const permalink = await findEpisodeDiscussionPostPermalink(subredditName, ep);
+      if (permalink) {
+        episodeCells.push(`[${ep}](https://reddit.com${permalink})`);
+      } else {
+        episodeCells.push(`${ep} (TBA)`);
+      }
     }
   }
 
@@ -1674,11 +1791,9 @@ async function notifyDiscordError(episodeNumber: number | undefined, title: stri
 async function updateAllPastEpisodesGrid(currentEpisodeNumber: number, subredditName: string): Promise<void> {
   console.log(`[cron] Retroactively updating grids for episodes 1 to ${currentEpisodeNumber}`);
   for (let ep = 1; ep <= currentEpisodeNumber; ep++) {
-    if (ep === 1) {
-      const mockModeEnabled = await isMockModeEnabled();
-      if (!mockModeEnabled) {
-        continue; // Skip editing Episode 1 in production since it was created manually and cannot be edited by the bot
-      }
+    const manualUrl = await getManualEpisodePost(ep);
+    if (manualUrl) {
+      continue; // Skip editing manually created posts
     }
     const storedPostId = await redis.get(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${ep}`);
     if (!storedPostId) {
@@ -1754,8 +1869,8 @@ async function submitEpisodeDiscussionPost(options: {
 const REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX = 'episode_release_verified_';
 
 async function verifyEpisodeIsAired(episodeNumber: number): Promise<boolean> {
-  if (await isMockModeEnabled()) {
-    console.log('[cron] Mock mode enabled; bypass release verification and return true.');
+  if (await isApiPlaytestModeEnabled()) {
+    console.log('[cron] API playtest mode enabled; bypass release verification and return true.');
     return true;
   }
   try {
@@ -1773,7 +1888,7 @@ async function verifyEpisodeIsAired(episodeNumber: number): Promise<boolean> {
       `[cron] Verifying release for episode ${String(episodeNumber)}. Jikan=${String(!!fromJikan)} AniList=${String(!!fromAniList)} Kitsu=${String(!!fromKitsu)}`
     );
 
-    // Check if AniList indicates the episode is in the future
+    // Check if AniList indicates the episode is in the future via nextAiringEpisode
     if (fromAniList?.airingAt && typeof fromAniList.airingAt === 'number') {
       const airingTime = fromAniList.airingAt > 10_000_000_000 ? fromAniList.airingAt : fromAniList.airingAt * 1000;
       if (airingTime > Date.now()) {
@@ -1782,6 +1897,23 @@ async function verifyEpisodeIsAired(episodeNumber: number): Promise<boolean> {
         );
         return false;
       }
+    }
+
+    // Check if Kitsu reports an airing date in the future
+    if (fromKitsu?.airingAt && typeof fromKitsu.airingAt === 'number') {
+      const kitsuAiringTime = fromKitsu.airingAt > 10_000_000_000 ? fromKitsu.airingAt : fromKitsu.airingAt * 1000;
+      if (kitsuAiringTime > Date.now()) {
+        console.log(
+          `[cron] Kitsu reports episode ${String(episodeNumber)} airs in the future: ${new Date(kitsuAiringTime).toISOString()}`
+        );
+        return false;
+      }
+    }
+
+    const anyApiOnline = jikan.online || aniList.online || kitsu.online;
+    if (!anyApiOnline) {
+      console.log('[cron] All metadata APIs are offline. Defaulting to true to avoid deleting thread during API outages.');
+      return true;
     }
 
     // Check if at least one metadata source successfully found the episode title/synopsis and it is not "TBA".
@@ -1819,9 +1951,9 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
     return;
   }
 
-  // Check if it is after 11:45 ET
+  // Check if it is after 12:00 PM ET
   const nowMinutes = localTimeToMinutes(et.hour, et.minute);
-  const checkMinutes = localTimeToMinutes(11, 45);
+  const checkMinutes = localTimeToMinutes(12, 0);
   if (nowMinutes < checkMinutes) {
     return;
   }
@@ -1835,7 +1967,7 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
     return;
   }
 
-  console.log(`[cron] Performing release correction check for episode ${String(episodeNumber)} after 11:45 ET`);
+  console.log(`[cron] Performing release correction check for episode ${String(episodeNumber)} after 12:00 PM ET`);
 
   const aired = await verifyEpisodeIsAired(episodeNumber);
   if (aired) {
@@ -1844,7 +1976,7 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
     return;
   }
 
-  console.log(`[cron] Episode ${String(episodeNumber)} is NOT live after 11:45 ET. Initiating auto-deletion...`);
+  console.log(`[cron] Episode ${String(episodeNumber)} is NOT live after 12:00 PM ET. Initiating auto-deletion...`);
 
   const postId = await redis.get(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${episodeNumber}`);
   let permalink = '';
@@ -1862,9 +1994,13 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
 
   // Reset Redis keys so we can attempt to post it later/next time
   await redis.del(REDIS_KEY_LAST_POSTED_ET_DATE);
-  await redis.del(REDIS_KEY_LAST_POSTED_EPISODE);
+  await redis.set(REDIS_KEY_LAST_POSTED_EPISODE, String(episodeNumber - 1));
   await redis.del(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${episodeNumber}`);
   await redis.del(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${episodeNumber}`);
+
+  // Set pending retry flag so the bot can attempt posting on non-posting weekdays
+  await redis.set(REDIS_KEY_PENDING_RETRY_EPISODE, String(episodeNumber));
+  console.log(`[cron] Set pending retry flag for episode ${String(episodeNumber)}`);
 
   try {
     const discordWebhook = await getDiscordWebhookUrl();
@@ -1873,7 +2009,7 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
       const discordDetails: { episodeNumber: number; postUrl?: string; error: Error } = {
         episodeNumber,
         error: new Error(
-          `The episode did not appear on Kitsu/AniList/Jikan APIs by 11:45 ET. The discussion thread has been deleted and the scheduler state has been reset to allow reposting.`
+          `The episode did not appear on Kitsu/AniList/Jikan APIs by 12:00 PM ET. The discussion thread has been deleted and the scheduler state has been reset to allow reposting.`
         ),
       };
       if (permalink) {
@@ -1887,6 +2023,10 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
 }
 
 export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
+  // Clear in-memory caches at the start of each invocation to prevent stale data
+  // from persisting across warm container reuses in Devvit's serverless model
+  clearInMemoryCaches();
+
   const force = options.force ?? false;
   const episodeNumberOverride = options.episodeNumberOverride;
   const now = new Date();
@@ -1894,17 +2034,23 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
   try {
 
 
-    const mockModeEnabled = await isMockModeEnabled();
+    const apiPlaytestModeEnabled = await isApiPlaytestModeEnabled();
+    let bypassWindow = apiPlaytestModeEnabled;
+
+    // Check if there is a pending retry from a previously delayed episode.
+    // If so, bypass the weekday-window gate to allow posting on any day.
+    const pendingRetryEpisode = await redis.get(REDIS_KEY_PENDING_RETRY_EPISODE);
+    if (pendingRetryEpisode && !bypassWindow) {
+      console.log(`[cron] Pending retry detected for episode ${pendingRetryEpisode}. Bypassing weekday-window gate.`);
+      bypassWindow = true;
+    }
+
     console.log(
-      `[cron] postCurrentEpisodeDiscussion start force=${String(force)} mockMode=${String(mockModeEnabled)} now=${now.toISOString()}`
+      `[cron] postCurrentEpisodeDiscussion start force=${String(force)} apiPlaytestMode=${String(apiPlaytestModeEnabled)} pendingRetry=${pendingRetryEpisode ?? 'none'} now=${now.toISOString()}`
     );
-    if (!force && !mockModeEnabled && !(await isScheduledWindowNow(now))) {
+
+    if (!force && !bypassWindow && !(await isScheduledWindowNow(now))) {
       console.log('[cron] Skip: outside scheduled window.');
-      try {
-        await performReleaseCorrectionCheck(now);
-      } catch (err) {
-        console.error('[cron] Self-correction check failed:', err);
-      }
       return {
         posted: false,
         reason: 'outside-scheduled-window',
@@ -1913,8 +2059,21 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
 
     const etDateKey = getEtDateKey(now);
     const alreadyPostedToday = await redis.get(REDIS_KEY_LAST_POSTED_ET_DATE);
-    if (!force && alreadyPostedToday === etDateKey) {
-      console.log(`[cron] Skip: already posted for ET date ${etDateKey}.`);
+    if (!force && !bypassWindow && alreadyPostedToday === etDateKey) {
+      console.log(`[cron] Skip: already posted for ET date ${etDateKey}. Reconciling current post.`);
+      const lastEpisode = await redis.get(REDIS_KEY_LAST_POSTED_EPISODE);
+      if (lastEpisode) {
+        try {
+          await reconcileExistingEpisodeDiscussionPost(Number(lastEpisode));
+        } catch (err) {
+          console.error('[cron] Failed to reconcile existing post on duplicate check:', err);
+        }
+      }
+      try {
+        await performReleaseCorrectionCheck(now);
+      } catch (err) {
+        console.error('[cron] Self-correction check failed:', err);
+      }
       return {
         posted: false,
         reason: 'already-posted-for-et-date',
@@ -1923,12 +2082,32 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
     }
 
     const lastEpisode = await redis.get(REDIS_KEY_LAST_POSTED_EPISODE);
-    const calculatedEpisode = lastEpisode ? Number(lastEpisode) + 1 : PREMIERE_EPISODE_NUMBER;
+    const lastPostedNumber = lastEpisode ? Number(lastEpisode) : 0;
+    
+    let calculatedEpisode = lastPostedNumber + 1;
+    while (await getManualEpisodePost(calculatedEpisode)) {
+      console.log(`[cron] Auto-skipping manual post for Episode ${calculatedEpisode}`);
+      calculatedEpisode++;
+    }
 
     const episodeNumber =
       typeof episodeNumberOverride === 'number' && Number.isInteger(episodeNumberOverride) && episodeNumberOverride > 0
         ? episodeNumberOverride
         : calculatedEpisode;
+
+    // Refuse to post if it is manual
+    const manualUrl = await getManualEpisodePost(episodeNumber);
+    if (manualUrl) {
+      console.log(`[cron] Refusing to post: Episode ${episodeNumber} is registered as manually posted: ${manualUrl}`);
+      // Clear pending retry flag if set — this episode won't be auto-posted
+      try { await redis.del(REDIS_KEY_PENDING_RETRY_EPISODE); } catch { /* non-critical */ }
+      return {
+        posted: false,
+        reason: 'episode-is-manually-posted',
+        episodeNumber,
+      };
+    }
+
     const subredditName = await getSubredditName();
     const reconcileResult = await reconcileExistingEpisodeDiscussionPost(episodeNumber);
     if (reconcileResult.postId) {
@@ -1942,11 +2121,69 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
       };
     }
 
+    // Airing date guard: verify the current date matches the expected airing date
+    // This prevents the bot from posting just because it's the right weekday
+    if (!force && !apiPlaytestModeEnabled) {
+      const expectedAiringDate = await computeAiringDateUtc(episodeNumber);
+      const expectedEtDate = getEtDateKey(expectedAiringDate);
+      const currentEtDate = getEtDateKey(now);
+
+      // Also check API-reported airing dates
+      const metadata = await getEpisodeMetadata(episodeNumber);
+      if (metadata?.airingAt && typeof metadata.airingAt === 'number') {
+        const apiAiringTime = metadata.airingAt > 10_000_000_000 ? metadata.airingAt : metadata.airingAt * 1000;
+        if (apiAiringTime > Date.now()) {
+          const apiAiringDate = getEtDateKey(new Date(apiAiringTime));
+          if (currentEtDate < apiAiringDate) {
+            console.log(
+              `[cron] Skip: API reports episode ${String(episodeNumber)} airs on ${apiAiringDate} but today is ${currentEtDate}`
+            );
+            return {
+              posted: false,
+              reason: 'episode-airs-in-future',
+              episodeNumber,
+              expectedDate: apiAiringDate,
+            };
+          }
+        }
+      }
+
+      // Computed schedule check: don't post before the computed airing date
+      if (currentEtDate < expectedEtDate) {
+        console.log(
+          `[cron] Skip: computed airing date is ${expectedEtDate} but today is ${currentEtDate}`
+        );
+        return {
+          posted: false,
+          reason: 'before-airing-date',
+          episodeNumber,
+          expectedDate: expectedEtDate,
+        };
+      }
+    }
+
+    const et = getTimePartsInET(now);
+    const nowMinutes = localTimeToMinutes(et.hour, et.minute);
+    const checkMinutes = localTimeToMinutes(12, 0);
+    if (!force && !apiPlaytestModeEnabled && nowMinutes >= checkMinutes) {
+      const aired = await verifyEpisodeIsAired(episodeNumber);
+      if (!aired) {
+        console.log(`[cron] Episode ${episodeNumber} has not aired yet (after 12:00 PM ET). Skipping post creation.`);
+        return {
+          posted: false,
+          reason: 'episode-not-aired-yet',
+          episodeNumber,
+        };
+      }
+    }
+
     const maxEpisodes = await getConfiguredOrApiMaxEpisodes(episodeNumber);
     if (!force && maxEpisodes !== null && episodeNumber > maxEpisodes) {
       console.log(
         `[cron] Skip: season finished. episode=${String(episodeNumber)} maxEpisodes=${String(maxEpisodes)}`
       );
+      // Clear pending retry flag if set — season is over, no more episodes to post
+      try { await redis.del(REDIS_KEY_PENDING_RETRY_EPISODE); } catch { /* non-critical */ }
       return {
         posted: false,
         reason: 'season-finished',
@@ -1956,11 +2193,8 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
     }
 
 
-    const episodeOneDiscussionExists = await hasEpisodeOneDiscussionUrl();
-    const initialLastPosted = episodeOneDiscussionExists ? INITIAL_LAST_POSTED_EPISODE_NUMBER : 0;
-    const lastPostedNumber = Number(lastEpisode || String(initialLastPosted));
     console.log(
-      `[cron] Episode state current=${String(episodeNumber)} lastPosted=${String(lastPostedNumber)} initialLastPosted=${String(initialLastPosted)}`
+      `[cron] Episode state current=${String(episodeNumber)} lastPosted=${String(lastPostedNumber)}`
     );
 
     if (!force && episodeNumber <= lastPostedNumber) {
@@ -2008,6 +2242,13 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
     await redis.set(REDIS_KEY_LAST_POSTED_EPISODE, String(payload.episodeNumber));
     await redis.set(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${payload.episodeNumber}`, post.id);
     await redis.set(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${payload.episodeNumber}`, post.permalink);
+
+    // Clear pending retry flag if it was set (episode successfully posted)
+    try {
+      await redis.del(REDIS_KEY_PENDING_RETRY_EPISODE);
+    } catch {
+      // Non-critical: ignore if del fails
+    }
 
     try {
       await updateAllPastEpisodesGrid(payload.episodeNumber, subredditName);

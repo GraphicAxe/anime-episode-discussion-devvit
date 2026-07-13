@@ -13,7 +13,7 @@
     "tasks": {
       "post-episode-discussion": {
         "endpoint": "/internal/cron/post-episode-discussion",
-        "cron": "30 * * * *"
+        "cron": "*/30 * * * *"
       }
     }
   },
@@ -25,16 +25,16 @@
         "helpText": "Optional Discord webhook for success/error notifications.",
         "isSecret": true
       },
-      "mockMode": {
-        "type": "string",
-        "label": "Mock Mode",
-        "helpText": "Set to true to use mock metadata for playtest and dry runs instead of live APIs.",
-        "defaultValue": "false"
-      },
       "apiPlaytestMode": {
         "type": "string",
         "label": "API Playtest Mode",
         "helpText": "Set to true to run an automatic API validation flow on playtest startup (forces Episode 1 then Episode 2).",
+        "defaultValue": "false"
+      },
+      "cleanProfile": {
+        "type": "string",
+        "label": "Clean Profile",
+        "helpText": "Set to true to wipe all bot discussion threads from the subreddit profile on startup/installation/upgrade.",
         "defaultValue": "false"
       }
     }
@@ -48,7 +48,8 @@
         "api.jikan.moe",
         "graphql.anilist.co",
         "en.wikipedia.org",
-        "kitsu.io"
+        "kitsu.io",
+        "discord.com"
       ]
     }
   },

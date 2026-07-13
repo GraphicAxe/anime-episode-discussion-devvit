@@ -3,11 +3,9 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { logger } from 'hono/logger';
 import { createServer, getServerPort } from '@devvit/web/server';
-import { settings } from '@devvit/settings';
-
 import { api } from './routes/api';
 import { triggers } from './routes/triggers';
-import { cron, postCurrentEpisodeDiscussion } from './routes/cron';
+import { cron } from './routes/cron';
 
 Devvit.addSettings([
   {
@@ -20,18 +18,19 @@ Devvit.addSettings([
   },
   {
     type: 'string',
-    name: 'mockMode',
-    label: 'Mock Mode',
-    helpText: 'Set to true to use mock metadata for playtest and dry runs instead of live APIs.',
+    name: 'apiPlaytestMode',
+    label: 'API Playtest Mode',
+    helpText:
+      'Set to true to run an automatic API validation flow on playtest startup (forces Episode 1 then Episode 2).',
     defaultValue: 'false',
     scope: SettingScope.App,
   },
   {
     type: 'string',
-    name: 'apiPlaytestMode',
-    label: 'API Playtest Mode',
+    name: 'cleanProfile',
+    label: 'Clean Profile',
     helpText:
-      'Set to true to run an automatic API validation flow on playtest startup (forces Episode 1 then Episode 2).',
+      'Set to true to wipe all bot discussion threads from the subreddit profile on startup/installation/upgrade.',
     defaultValue: 'false',
     scope: SettingScope.App,
   },
@@ -40,54 +39,7 @@ Devvit.addSettings([
 
 
 const app = new Hono();
-let startupMockCheckDone = false;
-
 app.use('*', logger());
-
-app.use('*', async (_c, next) => {
-  if (!startupMockCheckDone) {
-    startupMockCheckDone = true;
-
-    try {
-      const mockModeRaw = ((await settings.get<string>('mockMode')) || 'false').toLowerCase();
-      const mockModeEnabled =
-        mockModeRaw === 'true' || mockModeRaw === '1' || mockModeRaw === 'yes' || mockModeRaw === 'on';
-      const apiPlaytestModeRaw = ((await settings.get<string>('apiPlaytestMode')) || 'false').toLowerCase();
-      const apiPlaytestModeEnabled =
-        apiPlaytestModeRaw === 'true' ||
-        apiPlaytestModeRaw === '1' ||
-        apiPlaytestModeRaw === 'yes' ||
-        apiPlaytestModeRaw === 'on';
-
-
-
-
-
-      if (mockModeEnabled) {
-        const result = await postCurrentEpisodeDiscussion({ force: true });
-        console.log('[startup] Mock mode enabled; startup post check result:', result);
-      }
-
-      if (apiPlaytestModeEnabled) {
-        const episode1Result = await postCurrentEpisodeDiscussion({ force: true, episodeNumberOverride: 1 });
-        console.log('[startup] API playtest mode episode 1 result:', episode1Result);
-
-        const episode2Result = await postCurrentEpisodeDiscussion({ force: true, episodeNumberOverride: 2 });
-        console.log('[startup] API playtest mode episode 2 result:', episode2Result);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('No installed subreddit found')) {
-        console.log('[startup] Startup playtest flow skipped: App is not installed to a subreddit yet.');
-        startupMockCheckDone = false;
-      } else {
-        console.error('[startup] Startup playtest flow failed:', error);
-      }
-    }
-  }
-
-  await next();
-});
 
 app.onError((err, c) => {
   console.error('[Hono Server Error]:', err);
