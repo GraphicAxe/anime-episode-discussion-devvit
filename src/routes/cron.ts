@@ -15,12 +15,10 @@ type EpisodePayload = {
   nextEpisodeLink: string;
 };
 
-type ExternalEpisodePayload = Partial<EpisodePayload> & {
+type ExternalEpisodePayload = {
   episode?: number;
-  number?: number;
   title?: string;
   synopsis?: string;
-  summary?: string;
   jstTime?: string;
   etTime?: string;
   cestTime?: string;
@@ -28,7 +26,6 @@ type ExternalEpisodePayload = Partial<EpisodePayload> & {
   previousEpisodeLink?: string;
   nextEpisodeLink?: string;
   airingAt?: number | string;
-  airingTime?: string;
   totalEpisodes?: number;
 };
 
@@ -66,7 +63,7 @@ const JIKAN_ANIME_ID = '58878';
 const ANILIST_MEDIA_ID = '177637';
 const KITSU_ANIME_ID = '48880';
 const WIKIPEDIA_PAGE_TITLE = 'Goodbye,_Lara';
-const DEFAULT_MAX_EPISODES = 13;
+export const DEFAULT_MAX_EPISODES = 13;
 
 interface CastMember {
   character: string;
@@ -119,19 +116,29 @@ function resolveEnglishVoiceActor(characterName: string): string {
   const norm = characterName.toLowerCase().replace(/[^a-z]/g, '');
   if (norm.length === 0) return 'TBA';
 
+  // Pass 1: exact match (highest confidence)
   for (const c of HARDCODED_CAST) {
     const normKey = c.character.toLowerCase().replace(/[^a-z]/g, '');
-    // Exact match
     if (norm === normKey) {
       return c.enActor;
     }
-    // Substring match only if both strings are at least 3 chars to prevent false positives
+  }
+
+  // Pass 2: substring match, but only when the shorter string covers >= 80% of
+  // the longer one. This prevents false-positives like "lara" matching "laura".
+  for (const c of HARDCODED_CAST) {
+    const normKey = c.character.toLowerCase().replace(/[^a-z]/g, '');
     if (norm.length >= 3 && normKey.length >= 3) {
       if (norm.includes(normKey) || normKey.includes(norm)) {
-        return c.enActor;
+        const shorter = Math.min(norm.length, normKey.length);
+        const longer = Math.max(norm.length, normKey.length);
+        if (shorter / longer >= 0.8) {
+          return c.enActor;
+        }
       }
     }
   }
+
   // Hardcoded aliases for searchability
   if (norm.includes('mariotsu') || (norm.includes('otsu') && norm.includes('mari'))) {
     const mari = HARDCODED_CAST.find(c => c.character === 'Mari Otsu');
@@ -324,28 +331,30 @@ async function sendDiscordNotification(
     ],
   };
 
-  const res = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-  if (!res.ok) {
-    console.error(`Discord notification failed: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      console.error(`Discord notification failed: ${res.status} ${res.statusText}`);
+    }
+  } catch (err) {
+    console.error('[cron] Discord webhook request failed:', err);
   }
 }
 
-async function getSeriesTitle(): Promise<string> {
+function getSeriesTitle(): string {
   return SERIES_TITLE;
 }
 
-
-
-async function getPostTitleTemplate(): Promise<string> {
+function getPostTitleTemplate(): string {
   return POST_TITLE_TEMPLATE;
 }
 
-async function getBodyTemplate(): Promise<string> {
+function getBodyTemplate(): string {
   return DEFAULT_TEMPLATE;
 }
 
@@ -609,6 +618,12 @@ function normalizeName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+/**
+ * Normalizes character names for fuzzy matching across JP/EN sources.
+ * - Collapses double vowels (e.g. "Oono" → "Ono") for romanization variants like ō/ou/oo.
+ * - Sorts name parts so "Mari Otsu" matches "Otsu Mari" (JP vs EN name ordering).
+ * This is intentionally lossy — it's only used for cast merging, not display.
+ */
 function normalizeCharacterName(name: string): string {
   return name
     .toLowerCase()
@@ -1205,9 +1220,10 @@ async function fetchFromKitsu(episodeNumber: number): Promise<{ online: boolean;
         episode: episodeNumber,
       };
 
-      if (typeof payload.meta?.count === 'number' && payload.meta.count > 0) {
-        result.totalEpisodes = payload.meta.count;
-      }
+      // Note: payload.meta.count is the number of episode records currently in Kitsu's
+      // database, NOT the planned series total. For airing shows it may be less than the
+      // actual episode count (e.g. 5 of 13), so we intentionally do NOT use it as
+      // totalEpisodes. AniList and Jikan provide the authoritative planned count.
 
       if (match) {
         const attributes = match.attributes ?? {};
@@ -1415,7 +1431,8 @@ async function fetchAniListDescription(): Promise<string | undefined> {
 
 function isValidSynopsis(text?: string): boolean {
   if (!isMeaningfulText(text)) return false;
-  if (text.toLowerCase().includes('wikipedia')) return false;
+  // Filter out synopses that are just source attribution tags from Wikipedia
+  if (/\(source:\s*wikipedia\)/i.test(text)) return false;
   return true;
 }
 
@@ -1558,8 +1575,8 @@ async function getConfiguredOrApiMaxEpisodes(episodeNumber: number): Promise<num
 }
 
 async function buildDiscussionTitle(episodeNumber: number): Promise<string> {
-  const seriesTitle = await getSeriesTitle();
-  const template = await getPostTitleTemplate();
+  const seriesTitle = getSeriesTitle();
+  const template = getPostTitleTemplate();
   return applyCommonPlaceholders(template, {
     SERIES_TITLE: seriesTitle,
     EPISODE_NUMBER: String(episodeNumber),
@@ -1701,7 +1718,8 @@ async function buildNextEpisodeLink(episodeNumber: number, subredditName: string
 }
 
 export async function buildArchiveGrid(currentEpisodeNumber: number, subredditName: string): Promise<string> {
-  const maxEpisodes = (await getConfiguredOrApiMaxEpisodes(currentEpisodeNumber)) ?? 13;
+  const maxEpisodesRaw = (await getConfiguredOrApiMaxEpisodes(currentEpisodeNumber)) ?? 13;
+  const maxEpisodes = Math.max(currentEpisodeNumber, maxEpisodesRaw);
   const episodeCells: string[] = [];
 
   for (let ep = 1; ep <= maxEpisodes; ep++) {
@@ -1746,15 +1764,20 @@ export async function buildArchiveGrid(currentEpisodeNumber: number, subredditNa
 }
 
 export async function buildEpisodePayload(episodeNumber: number): Promise<EpisodePayload> {
+  // Clear in-memory caches when entering from non-cron entry points (e.g. /api/preview)
+  // to prevent stale data from persisting across warm container reuses.
+  // This is idempotent — clearInMemoryCaches() is safe to call multiple times.
+  clearInMemoryCaches();
+
   const external = await getEpisodeMetadata(episodeNumber);
   const subredditName = await getSubredditName();
 
   const scheduledAiringDate = await computeAiringDateUtc(episodeNumber);
 
   return {
-    episodeNumber: external?.episodeNumber ?? external?.episode ?? external?.number ?? episodeNumber,
-    episodeTitle: external?.episodeTitle ?? external?.title ?? 'TBA',
-    synopsis: external?.synopsis ?? external?.summary ?? 'TBA',
+    episodeNumber,
+    episodeTitle: external?.title ?? 'TBA',
+    synopsis: external?.synopsis ?? 'TBA',
     jstTime: external?.jstTime ?? formatTimeInZone(scheduledAiringDate, 'Asia/Tokyo'),
     etTime: external?.etTime ?? formatTimeInZone(scheduledAiringDate, ET_TIME_ZONE),
     cestTime: external?.cestTime ?? formatTimeInZone(scheduledAiringDate, 'Europe/Paris'),
@@ -1766,8 +1789,8 @@ export async function buildEpisodePayload(episodeNumber: number): Promise<Episod
 
 export async function buildEpisodePostMarkdown(payload: EpisodePayload): Promise<string> {
   const subredditName = await getSubredditName();
-  const seriesTitle = await getSeriesTitle();
-  const template = await getBodyTemplate();
+  const seriesTitle = getSeriesTitle();
+  const template = getBodyTemplate();
   const baseValues = {
     SERIES_TITLE: seriesTitle,
     SUBREDDIT_NAME: subredditName,
@@ -1814,7 +1837,7 @@ async function notifyDiscordUpdate(episodeNumber: number, postTitle: string, pos
   });
 }
 
-async function notifyDiscordError(episodeNumber: number | undefined, title: string, error: unknown) {
+export async function notifyDiscordError(episodeNumber: number | undefined, title: string, error: unknown) {
   const discordWebhook = await getDiscordWebhookUrl();
   if (!discordWebhook) return;
 
@@ -2054,15 +2077,13 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
   }
   let permalink = '';
 
-  if (postId) {
-    try {
-      const post = await reddit.getPostById(postId as `t3_${string}`);
-      permalink = post.permalink;
-      await post.delete();
-      console.log(`[cron] Deleted delayed episode discussion thread: postId=${postId}`);
-    } catch (err) {
-      console.error(`[cron] Failed to delete post ${postId}:`, err);
-    }
+  try {
+    const post = await reddit.getPostById(postId as `t3_${string}`);
+    permalink = post.permalink;
+    await post.delete();
+    console.log(`[cron] Deleted delayed episode discussion thread: postId=${postId}`);
+  } catch (err) {
+    console.error(`[cron] Failed to delete post ${postId}:`, err);
   }
 
   // Reset Redis keys so we can attempt to post it later/next time
@@ -2107,13 +2128,27 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
   try {
 
 
+    const lastEpisode = await redis.get(REDIS_KEY_LAST_POSTED_EPISODE);
+    const lastPostedNumber = lastEpisode ? Number(lastEpisode) : 0;
+    
+    let calculatedEpisode = lastPostedNumber + 1;
+    while (await getManualEpisodePost(calculatedEpisode)) {
+      console.log(`[cron] Auto-skipping manual post for Episode ${calculatedEpisode}`);
+      calculatedEpisode++;
+    }
+
+    const episodeNumber =
+      typeof episodeNumberOverride === 'number' && Number.isInteger(episodeNumberOverride) && episodeNumberOverride > 0
+        ? episodeNumberOverride
+        : calculatedEpisode;
+
     const apiPlaytestModeEnabled = await isApiPlaytestModeEnabled();
     let bypassWindow = apiPlaytestModeEnabled;
 
-    // Check if there is a pending retry from a previously delayed episode.
+    // Check if there is a pending retry from a previously delayed episode for the CURRENT episode we are attempting to post.
     // If so, bypass the weekday-window gate to allow posting on any day.
     const pendingRetryEpisode = await redis.get(REDIS_KEY_PENDING_RETRY_EPISODE);
-    if (pendingRetryEpisode && !bypassWindow) {
+    if (pendingRetryEpisode === String(episodeNumber) && !bypassWindow) {
       console.log(`[cron] Pending retry detected for episode ${pendingRetryEpisode}. Bypassing weekday-window gate.`);
       bypassWindow = true;
     }
@@ -2154,19 +2189,6 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
       };
     }
 
-    const lastEpisode = await redis.get(REDIS_KEY_LAST_POSTED_EPISODE);
-    const lastPostedNumber = lastEpisode ? Number(lastEpisode) : 0;
-    
-    let calculatedEpisode = lastPostedNumber + 1;
-    while (await getManualEpisodePost(calculatedEpisode)) {
-      console.log(`[cron] Auto-skipping manual post for Episode ${calculatedEpisode}`);
-      calculatedEpisode++;
-    }
-
-    const episodeNumber =
-      typeof episodeNumberOverride === 'number' && Number.isInteger(episodeNumberOverride) && episodeNumberOverride > 0
-        ? episodeNumberOverride
-        : calculatedEpisode;
 
     // Refuse to post if it is manual
     const manualUrl = await getManualEpisodePost(episodeNumber);
@@ -2207,6 +2229,8 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
         const apiAiringTime = metadata.airingAt > 10_000_000_000 ? metadata.airingAt : metadata.airingAt * 1000;
         if (apiAiringTime > Date.now()) {
           const apiAiringDate = getEtDateKey(new Date(apiAiringTime));
+          // String comparison is safe here: getEtDateKey returns YYYY-MM-DD format
+          // where lexicographic ordering matches chronological ordering.
           if (currentEtDate < apiAiringDate) {
             console.log(
               `[cron] Skip: API reports episode ${String(episodeNumber)} airs on ${apiAiringDate} but today is ${currentEtDate}`
@@ -2222,6 +2246,7 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
       }
 
       // Computed schedule check: don't post before the computed airing date
+      // String comparison is safe: YYYY-MM-DD format ensures lexicographic = chronological
       if (currentEtDate < expectedEtDate) {
         console.log(
           `[cron] Skip: computed airing date is ${expectedEtDate} but today is ${currentEtDate}`
@@ -2238,10 +2263,16 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
     const et = getTimePartsInET(now);
     const nowMinutes = localTimeToMinutes(et.hour, et.minute);
     const checkMinutes = localTimeToMinutes(12, 0);
-    if (!force && !apiPlaytestModeEnabled && nowMinutes >= checkMinutes) {
+    
+    // If we are bypassing the window (pending retry), we MUST verify it has aired, 
+    // because we are off-schedule and don't know if the delay is over.
+    // Otherwise, we only verify on the scheduled day if it's after 12:00 PM.
+    const requiresAiringVerification = !force && !apiPlaytestModeEnabled && (bypassWindow || nowMinutes >= checkMinutes);
+
+    if (requiresAiringVerification) {
       const aired = await verifyEpisodeIsAired(episodeNumber);
       if (!aired) {
-        console.log(`[cron] Episode ${episodeNumber} has not aired yet (after 12:00 PM ET). Skipping post creation.`);
+        console.log(`[cron] Episode ${episodeNumber} has not aired yet. Skipping post creation.`);
         // Set pending retry so we keep trying on subsequent days
         await redis.set(REDIS_KEY_PENDING_RETRY_EPISODE, String(episodeNumber));
         return {
@@ -2363,7 +2394,8 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
 export const cron = new Hono();
 
 cron.post('/post-episode-discussion', async (c) => {
-  await c.req.json();
+  // Consume the request body (Devvit scheduler sends a JSON payload but we don't use it)
+  await c.req.json().catch(() => {});
   const result = await postCurrentEpisodeDiscussion({ force: false });
   return c.json(result, 200);
 });

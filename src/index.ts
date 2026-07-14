@@ -21,7 +21,7 @@ Devvit.addSettings([
     name: 'apiPlaytestMode',
     label: 'API Playtest Mode',
     helpText:
-      'Set to true to run an automatic API validation flow on playtest startup (forces Episode 1 then Episode 2).',
+      'Set to true to bypass schedule constraints and duplicate limits during playtests.',
     defaultValue: 'false',
     scope: SettingScope.App,
   },

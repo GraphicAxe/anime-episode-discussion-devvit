@@ -8,7 +8,8 @@ import {
   REDIS_KEY_PENDING_RETRY_EPISODE,
   REDIS_KEY_EPISODE_POST_ID_PREFIX,
   REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX,
-  REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX
+  REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX,
+  DEFAULT_MAX_EPISODES
 } from './cron';
 
 export const triggers = new Hono();
@@ -20,7 +21,12 @@ interface InstallRequest {
 }
 
 async function handleInstallOrUpgrade(c: Context, eventName: string) {
-  const input = await c.req.json<InstallRequest>();
+  let input: InstallRequest = {};
+  try {
+    input = await c.req.json<InstallRequest>();
+  } catch (err) {
+    console.warn(`[${eventName}] Failed to parse JSON payload.`, err);
+  }
   const name = input.subreddit?.name;
 
   if (name) {
@@ -73,8 +79,9 @@ async function handleInstallOrUpgrade(c: Context, eventName: string) {
         await redis.del(REDIS_KEY_LAST_POSTED_ET_DATE);
         await redis.del(REDIS_KEY_PENDING_RETRY_EPISODE);
         
-        // Delete all episode tracking keys
-        for (let ep = 1; ep <= 30; ep++) {
+        // Delete all episode tracking keys up to a safe ceiling
+        const cleanupCeiling = Math.max(DEFAULT_MAX_EPISODES, 30);
+        for (let ep = 1; ep <= cleanupCeiling; ep++) {
           await redis.del(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${ep}`);
           await redis.del(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${ep}`);
           await redis.del(`${REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX}${ep}`);
