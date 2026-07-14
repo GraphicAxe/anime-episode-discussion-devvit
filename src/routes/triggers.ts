@@ -2,6 +2,14 @@ import { Context, Hono } from 'hono';
 import { reddit } from '@devvit/reddit';
 import { redis } from '@devvit/redis';
 import { settings } from '@devvit/settings';
+import {
+  REDIS_KEY_LAST_POSTED_EPISODE,
+  REDIS_KEY_LAST_POSTED_ET_DATE,
+  REDIS_KEY_PENDING_RETRY_EPISODE,
+  REDIS_KEY_EPISODE_POST_ID_PREFIX,
+  REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX,
+  REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX
+} from './cron';
 
 export const triggers = new Hono();
 
@@ -61,15 +69,15 @@ async function handleInstallOrUpgrade(c: Context, eventName: string) {
         }
 
         // Clean up Redis tracking keys as well
-        await redis.del('last_posted_episode_number');
-        await redis.del('last_posted_et_date');
-        await redis.del('pending_retry_episode');
+        await redis.del(REDIS_KEY_LAST_POSTED_EPISODE);
+        await redis.del(REDIS_KEY_LAST_POSTED_ET_DATE);
+        await redis.del(REDIS_KEY_PENDING_RETRY_EPISODE);
         
         // Delete all episode tracking keys
         for (let ep = 1; ep <= 30; ep++) {
-          await redis.del(`episode_post_id_${ep}`);
-          await redis.del(`episode_post_permalink_${ep}`);
-          await redis.del(`episode_release_verified_${ep}`);
+          await redis.del(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${ep}`);
+          await redis.del(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${ep}`);
+          await redis.del(`${REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX}${ep}`);
         }
         console.log(`[cleanProfile] Completed profile wiping and cleared Redis.`);
       }

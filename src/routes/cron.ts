@@ -37,15 +37,16 @@ type RunOptions = {
   episodeNumberOverride?: number;
 };
 
-type DiscordNotificationType = 'success' | 'update' | 'error';
+type DiscordNotificationType = 'success' | 'update' | 'error' | 'alert';
 
-const ET_TIME_ZONE = 'America/New_York';
-const REDIS_KEY_LAST_POSTED_EPISODE = 'last_posted_episode_number';
-const REDIS_KEY_LAST_POSTED_ET_DATE = 'last_posted_et_date';
-const REDIS_KEY_EPISODE_POST_ID_PREFIX = 'episode_post_id_';
-const REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX = 'episode_post_permalink_';
-const REDIS_KEY_LAST_CAST_AND_STAFF = 'last_successful_cast_and_staff';
-const REDIS_KEY_PENDING_RETRY_EPISODE = 'pending_retry_episode';
+export const ET_TIME_ZONE = 'America/New_York';
+export const REDIS_KEY_LAST_POSTED_EPISODE = 'last_posted_episode_number';
+export const REDIS_KEY_LAST_POSTED_ET_DATE = 'last_posted_et_date';
+export const REDIS_KEY_EPISODE_POST_ID_PREFIX = 'episode_post_id_';
+export const REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX = 'episode_post_permalink_';
+export const REDIS_KEY_LAST_CAST_AND_STAFF = 'last_successful_cast_and_staff';
+export const REDIS_KEY_PENDING_RETRY_EPISODE = 'pending_retry_episode';
+export const REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX = 'episode_release_verified_';
 
 const SERIES_TITLE = 'Goodbye, Lara';
 const POST_TITLE_TEMPLATE = 'Goodbye, Lara - Episode {EPISODE_NUMBER} Discussion';
@@ -250,25 +251,32 @@ async function sendDiscordNotification(
   const isSuccess = notificationType === 'success';
   const isUpdate = notificationType === 'update';
   const isError = notificationType === 'error';
+  const isAlert = notificationType === 'alert';
   const payload = {
     content: isSuccess
       ? '✅ **WORKFLOW SUCCESS** ✅'
       : isUpdate
         ? '🔄 **POST UPDATED** 🔄'
-        : '🚨 **BOT EXCEPTION** 🚨',
+        : isAlert
+          ? '⚠️ **BOT ALERT** ⚠️'
+          : '🚨 **BOT EXCEPTION** 🚨',
     embeds: [
       {
         title: isSuccess
           ? 'Episode Discussion Posted Successfully'
           : isUpdate
             ? 'Episode Discussion Updated'
-            : 'Episode Discussion Failed',
+            : isAlert
+              ? 'Post Deleted Externally'
+              : 'Episode Discussion Failed',
         description: isSuccess
           ? 'The automation ran successfully and posted a new episode discussion thread.'
           : isUpdate
             ? 'The automation refreshed an existing episode discussion thread with updated metadata.'
-            : 'The automation encountered an error while trying to create the episode discussion thread.',
-        color: isSuccess ? 5763719 : isUpdate ? 3447003 : 16711680,
+            : isAlert
+              ? (details.error?.message || 'An existing episode discussion thread was deleted externally. The bot is cleaning up state.')
+              : 'The automation encountered an error while trying to create the episode discussion thread.',
+        color: isSuccess ? 5763719 : isUpdate ? 3447003 : isAlert ? 16753920 : 16711680,
         fields: [
           {
             name: 'Title',
@@ -290,7 +298,8 @@ async function sendDiscordNotification(
                 },
               ]
             : []),
-          ...(details.error
+          // Only show error details for 'error' type, not for 'alert' (which uses synthetic errors for descriptions)
+          ...(!isAlert && details.error
             ? [
                 {
                   name: 'Error Message',
@@ -304,7 +313,11 @@ async function sendDiscordNotification(
             : []),
         ],
         footer: {
-          text: isError ? 'Devvit Automation • Status: Unhealthy' : 'Devvit Automation • Status: Healthy',
+          text: isError
+            ? 'Devvit Automation • Status: Unhealthy'
+            : isAlert
+              ? 'Devvit Automation • Status: Attention Required'
+              : 'Devvit Automation • Status: Healthy',
         },
         timestamp: new Date().toISOString(),
       },
@@ -1569,16 +1582,26 @@ async function findEpisodeDiscussionPostPermalink(subredditName: string, episode
     }
   }
 
-  const listing = reddit.getNewPosts({ subredditName, limit: 100, pageSize: 100 });
-  const posts = await listing.all();
-  const exactTitle = (await buildDiscussionTitle(episodeNumber)).toLowerCase();
+  // Search the bot's own posts (not the entire subreddit) since the bot is always the author
+  try {
+    const appUser = await reddit.getAppUser();
+    if (appUser) {
+      const listing = appUser.getPosts({ sort: 'new', limit: 100, pageSize: 100 });
+      const posts = await listing.all(); // Fetch all bot posts to ensure we can build archive grids
+      const exactTitle = (await buildDiscussionTitle(episodeNumber)).toLowerCase();
 
-  const found = posts.find((p) => p.title.toLowerCase() === exactTitle);
-  if (!found) return null;
+      const found = posts.find((p) => p.title.toLowerCase() === exactTitle && p.subredditName === subredditName);
+      if (found) {
+        await redis.set(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${episodeNumber}`, found.id);
+        await redis.set(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${episodeNumber}`, found.permalink);
+        return found.permalink;
+      }
+    }
+  } catch (err) {
+    console.error(`[cron] Failed to search bot's own posts for episode ${episodeNumber}:`, err);
+  }
 
-  await redis.set(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${episodeNumber}`, found.id);
-  await redis.set(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${episodeNumber}`, found.permalink);
-  return found.permalink;
+  return null;
 }
 
 async function buildPreviousEpisodeLink(episodeNumber: number, subredditName: string): Promise<string> {
@@ -1620,12 +1643,28 @@ async function reconcileExistingEpisodeDiscussionPost(episodeNumber: number): Pr
     // Post was deleted externally (e.g., by a moderator). Clean up stale Redis keys
     // so the flow falls through to create a new post.
     console.error(`[cron] Stored post ${storedPostId} for episode ${String(episodeNumber)} not found (likely deleted). Cleaning up Redis keys.`, err);
+    try {
+      const postTitle = await buildDiscussionTitle(episodeNumber);
+      await notifyDiscordPostDeleted(episodeNumber, postTitle, storedPostId, false);
+    } catch (discordErr) {
+      console.error('[cron] Could not send Discord post deleted notification:', discordErr);
+    }
     await redis.del(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${episodeNumber}`);
     await redis.del(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${episodeNumber}`);
+    // rollback so it tries to repost
+    await redis.del(REDIS_KEY_LAST_POSTED_ET_DATE);
+    await redis.set(REDIS_KEY_LAST_POSTED_EPISODE, String(episodeNumber - 1));
+    await redis.set(REDIS_KEY_PENDING_RETRY_EPISODE, String(episodeNumber));
+
     return { updated: false };
   }
 
   if (!storedPost.body) {
+    return { updated: false, postId: storedPost.id, permalink: storedPost.permalink };
+  }
+
+  if (storedPost.removed || storedPost.spam) {
+    console.log(`[cron] Episode ${String(episodeNumber)} post ${storedPost.id} is removed or marked as spam by moderators. Skipping edit.`);
     return { updated: false, postId: storedPost.id, permalink: storedPost.permalink };
   }
 
@@ -1662,7 +1701,7 @@ async function buildNextEpisodeLink(episodeNumber: number, subredditName: string
 }
 
 export async function buildArchiveGrid(currentEpisodeNumber: number, subredditName: string): Promise<string> {
-  const maxEpisodes = (await getConfiguredOrApiMaxEpisodes(currentEpisodeNumber)) || 13;
+  const maxEpisodes = (await getConfiguredOrApiMaxEpisodes(currentEpisodeNumber)) ?? 13;
   const episodeCells: string[] = [];
 
   for (let ep = 1; ep <= maxEpisodes; ep++) {
@@ -1788,6 +1827,25 @@ async function notifyDiscordError(episodeNumber: number | undefined, title: stri
   await sendDiscordNotification(discordWebhook, 'error', title, payload);
 }
 
+async function notifyDiscordPostDeleted(
+  episodeNumber: number,
+  postTitle: string,
+  storedPostId: string,
+  isPastEpisode: boolean
+) {
+  const discordWebhook = await getDiscordWebhookUrl();
+  if (!discordWebhook) return;
+
+  const errorMsg = isPastEpisode
+    ? `Past episode discussion post ID ${storedPostId} was deleted externally. Cleared Redis state for this episode; it will now display as TBA in grids.`
+    : `Active episode discussion post ID ${storedPostId} was deleted externally. Cleared Redis state for this episode and initiated reposting.`;
+
+  await sendDiscordNotification(discordWebhook, 'alert', postTitle, {
+    episodeNumber,
+    error: new Error(errorMsg),
+  });
+}
+
 async function updateAllPastEpisodesGrid(currentEpisodeNumber: number, subredditName: string): Promise<void> {
   console.log(`[cron] Retroactively updating grids for episodes 1 to ${currentEpisodeNumber}`);
   for (let ep = 1; ep <= currentEpisodeNumber; ep++) {
@@ -1805,6 +1863,10 @@ async function updateAllPastEpisodesGrid(currentEpisodeNumber: number, subreddit
       try {
         const storedPost = await reddit.getPostById(finalPostId as `t3_${string}`);
         if (storedPost && storedPost.body) {
+          if (storedPost.removed || storedPost.spam) {
+            console.log(`[cron] Retroactive grid update: Episode ${ep} post ${storedPost.id} is removed or marked as spam by moderators. Skipping.`);
+            continue;
+          }
           const payload = await buildEpisodePayload(ep);
           const updatedBody = await buildEpisodePostMarkdown(payload);
           if (storedPost.body.trim() !== updatedBody.trim()) {
@@ -1813,7 +1875,15 @@ async function updateAllPastEpisodesGrid(currentEpisodeNumber: number, subreddit
           }
         }
       } catch (err) {
-        console.error(`[cron] Failed to retroactively edit episode ${ep} post:`, err);
+        console.error(`[cron] Failed to retroactively edit episode ${ep} post (likely deleted). Cleaning up Redis keys:`, err);
+        try {
+          const postTitle = await buildDiscussionTitle(ep);
+          await notifyDiscordPostDeleted(ep, postTitle, finalPostId, true);
+        } catch (discordErr) {
+          console.error('[cron] Could not send Discord past post deleted notification:', discordErr);
+        }
+        await redis.del(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${ep}`);
+        await redis.del(`${REDIS_KEY_EPISODE_POST_PERMALINK_PREFIX}${ep}`);
       }
     }
   }
@@ -1821,7 +1891,7 @@ async function updateAllPastEpisodesGrid(currentEpisodeNumber: number, subreddit
 
 function isFlairRelatedPostError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /flair|template|invalid.*flair|unknown.*flair|not found/i.test(message);
+  return /flair|template|invalid.*flair|unknown.*flair|flair.*not found/i.test(message);
 }
 
 async function submitEpisodeDiscussionPost(options: {
@@ -1866,7 +1936,6 @@ async function submitEpisodeDiscussionPost(options: {
   }
 }
 
-const REDIS_KEY_EPISODE_RELEASE_VERIFIED_PREFIX = 'episode_release_verified_';
 
 async function verifyEpisodeIsAired(episodeNumber: number): Promise<boolean> {
   if (await isApiPlaytestModeEnabled()) {
@@ -1979,6 +2048,10 @@ async function performReleaseCorrectionCheck(now: Date): Promise<void> {
   console.log(`[cron] Episode ${String(episodeNumber)} is NOT live after 12:00 PM ET. Initiating auto-deletion...`);
 
   const postId = await redis.get(`${REDIS_KEY_EPISODE_POST_ID_PREFIX}${episodeNumber}`);
+  if (!postId) {
+    console.log(`[cron] No post ID found for episode ${String(episodeNumber)} during correction check. Likely already cleaned up.`);
+    return;
+  }
   let permalink = '';
 
   if (postId) {
@@ -2169,6 +2242,8 @@ export async function postCurrentEpisodeDiscussion(options: RunOptions = {}) {
       const aired = await verifyEpisodeIsAired(episodeNumber);
       if (!aired) {
         console.log(`[cron] Episode ${episodeNumber} has not aired yet (after 12:00 PM ET). Skipping post creation.`);
+        // Set pending retry so we keep trying on subsequent days
+        await redis.set(REDIS_KEY_PENDING_RETRY_EPISODE, String(episodeNumber));
         return {
           posted: false,
           reason: 'episode-not-aired-yet',
